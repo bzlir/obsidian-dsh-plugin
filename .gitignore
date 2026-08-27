@@ -3,6 +3,7 @@ main.js
 *.js.map
 dist/
 .DS_Store
+data.json
 scripts/
 backups/
 scripts/backups/

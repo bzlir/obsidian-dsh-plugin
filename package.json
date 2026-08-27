@@ -4,6 +4,7 @@
   "description": "Host DeepSeek Harness (dsh) inside Obsidian",
   "main": "main.js",
   "type": "module",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
