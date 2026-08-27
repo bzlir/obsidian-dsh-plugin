@@ -1,5 +1,7 @@
 # DSH in Obsidian
 
+English | [简体中文](./README.zh-CN.md)
+
 Host [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) inside Obsidian — let the dsh agent read and write your Vault files, and maintain agent working memory directly inside the Vault.
 
 ## What it does
