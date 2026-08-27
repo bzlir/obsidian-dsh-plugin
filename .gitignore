@@ -6,3 +6,4 @@ dist/
 scripts/
 backups/
 scripts/backups/
+.playwright-cli/

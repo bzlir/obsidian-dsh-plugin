@@ -1,13 +1,19 @@
-import { ChildProcess, spawn } from "child_process";
+import { ChildProcess, spawn, execFileSync } from "child_process";
+import http from "http";
 import { createServer, createConnection } from "net";
 import { homedir } from "os";
-import { existsSync, readdirSync } from "fs";
-import { join } from "path";
+import { existsSync, readdirSync, realpathSync } from "fs";
+import { dirname, join } from "path";
 
 const DSH_COMMAND = "dsh";
-const STARTUP_TIMEOUT_MS = 30_000;
+const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
 const SHUTDOWN_GRACE_MS = 5_000;
+
+interface ResolvedBin {
+  node: string;
+  dshScript: string;
+}
 
 function candidateBinDirs(): string[] {
   const home = homedir();
@@ -26,20 +32,20 @@ function candidateBinDirs(): string[] {
 
 function augmentedEnv(): NodeJS.ProcessEnv {
   const base = process.env.PATH ?? "/usr/bin:/bin";
-  const merged = base.split(":");
-  const seen = new Set(merged);
+  const prepend: string[] = [];
+  const seen = new Set(base.split(":"));
   for (const d of candidateBinDirs()) {
     if (existsSync(d) && !seen.has(d)) {
-      merged.push(d);
+      prepend.push(d);
       seen.add(d);
     }
   }
-  return { ...process.env, PATH: merged.join(":") };
+  return { ...process.env, PATH: [...prepend, ...base.split(":")].join(":") };
 }
 
-function resolveViaLoginShell(): Promise<string | null> {
+function runShell(cmd: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn("/bin/zsh", ["-l", "-c", "command -v dsh"], {
+    const child = spawn("/bin/zsh", ["-l", "-c", cmd], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
@@ -49,11 +55,62 @@ function resolveViaLoginShell(): Promise<string | null> {
   });
 }
 
+function checkNodeHasZstd(nodePath: string): boolean {
+  try {
+    require("child_process").execFileSync(
+      nodePath,
+      ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
+      { stdio: "pipe", timeout: 5000 }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveNodeFromDsh(dshAbs: string): string | null {
+  const binDir = dirname(dshAbs);
+  const nodePath = join(binDir, "node");
+  if (existsSync(nodePath) && checkNodeHasZstd(nodePath)) return nodePath;
+  return null;
+}
+
+function findInDirs(name: string, dirs: string[]): string | null {
+  for (const d of dirs) {
+    const p = join(d, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function resolveBin(): Promise<ResolvedBin | null> {
+  const env = augmentedEnv();
+  const dirs = candidateBinDirs();
+
+  const dshAbs = findInDirs(DSH_COMMAND, dirs);
+  if (!dshAbs) return null;
+
+  const dshScript = realpathSync(dshAbs);
+
+  let nodePath = resolveNodeFromDsh(dshAbs);
+  if (!nodePath) {
+    const candidate = findInDirs("node", dirs);
+    if (candidate && checkNodeHasZstd(candidate)) {
+      nodePath = candidate;
+    }
+  }
+  if (!nodePath) return null;
+
+  return { node: nodePath, dshScript };
+}
+
 export class DshManager {
   private process: ChildProcess | null = null;
   private port: number | null = null;
   private stderrLines: string[] = [];
-  private resolvedCommand: string | null = null;
+  private resolved: ResolvedBin | null = null;
+  private exitHookInstalled = false;
+  private trackedPid: number | null = null;
   private onUnexpectedExit: ((info: { code: number | null; signal: string | null; stderr: string }) => void) | null = null;
 
   setOnUnexpectedExit(cb: (info: { code: number | null; signal: string | null; stderr: string }) => void): void {
@@ -61,53 +118,56 @@ export class DshManager {
   }
 
   async isAvailable(): Promise<boolean> {
-    if (this.resolvedCommand) return true;
-    const cmd = await this.resolveDsh();
-    if (cmd) {
-      this.resolvedCommand = cmd;
+    if (this.resolved) return true;
+    const bin = await resolveBin();
+    if (bin) {
+      this.resolved = bin;
       return true;
     }
     return false;
-  }
-
-  private resolveDsh(): Promise<string | null> {
-    return new Promise((resolve) => {
-      const child = spawn(DSH_COMMAND, ["--version"], {
-        stdio: "pipe",
-        env: augmentedEnv(),
-      });
-      child.on("error", async () => {
-        const viaShell = await resolveViaLoginShell();
-        resolve(viaShell);
-      });
-      child.on("exit", async (code) => {
-        if (code === 0) resolve(DSH_COMMAND);
-        else {
-          const viaShell = await resolveViaLoginShell();
-          resolve(viaShell);
-        }
-      });
-    });
   }
 
   async start(vaultPath: string): Promise<number> {
     if (this.process) {
       throw new Error("DSH process is already running");
     }
-    if (!this.resolvedCommand) {
-      const cmd = await this.resolveDsh();
-      if (!cmd) throw new Error("DSH binary not found on PATH");
-      this.resolvedCommand = cmd;
+    // Reap any orphaned dsh web processes from a previous crashed session.
+    // They would otherwise pile up on every plugin reload / Obsidian restart.
+    this.reapOrphanedDsh();
+    if (!this.resolved) {
+      const bin = await resolveBin();
+      if (!bin) throw new Error("DSH binary not found (need dsh + node>=22 with createZstdDecompress)");
+      this.resolved = bin;
     }
     const port = await this.findFreePort();
     this.port = port;
     this.stderrLines = [];
 
     this.process = spawn(
-      this.resolvedCommand,
-      ["web", "--port", String(port), "--host", "127.0.0.1"],
+      this.resolved.node,
+      [this.resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
       { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() }
     );
+
+    // Install process-exit guard the first time we spawn, so a hard kill of
+    // Obsidian (SIGKILL/crash/Cmd+Q without unload) still tears down dsh.
+    // Exit hooks must be minimal and fully synchronous — no child-process
+    // spawning, no setTimeout, no async. The event loop is tearing down.
+    if (!this.exitHookInstalled) {
+      this.exitHookInstalled = true;
+      const killSync = () => {
+        const pid = this.trackedPid;
+        if (pid == null) return;
+        try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+      };
+      process.on("exit", killSync);
+      process.on("SIGTERM", killSync);
+      process.on("SIGINT", killSync);
+      process.on("SIGUSR2", killSync);
+      process.on("SIGHUP", killSync);
+    }
+
+    this.trackedPid = this.process.pid ?? null;
 
     this.process.stderr?.on("data", (data: Buffer) => {
       const lines = data.toString().split("\n").filter((l) => l.trim());
@@ -137,18 +197,150 @@ export class DshManager {
     });
 
     await this.waitForReady(port);
+    await this.ensureWorkspace(port, vaultPath);
     return port;
+  }
+
+  private async ensureWorkspace(port: number, vaultPath: string): Promise<void> {
+    const body = JSON.stringify({
+      type: "client-request",
+      rpcId: "workspace-init",
+      method: "workspace.create",
+      payload: { path: vaultPath },
+    });
+    try {
+      const ok = await new Promise<boolean>((resolve) => {
+        const req = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/api/workspace.create",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(body),
+            },
+            timeout: 10_000,
+          },
+          (res) => {
+            let data = "";
+            res.on("data", (chunk: Buffer) => (data += chunk.toString()));
+            res.on("end", () => {
+              resolve(res.statusCode === 200 && data.includes("server-response"));
+            });
+          },
+        );
+        req.on("error", () => resolve(false));
+        req.on("timeout", () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.write(body);
+        req.end();
+      });
+      if (!ok) console.warn("[DSH] workspace.create call may have failed");
+    } catch (err) {
+      console.warn("[DSH] failed to add vault as workspace:", (err as Error).message);
+    }
   }
 
   stop(): void {
     if (this.process) {
-      const proc = this.process;
+      this.killTree();
       this.process = null;
-      proc.removeAllListeners("exit");
-      proc.kill("SIGTERM");
-      setTimeout(() => {
-        if (!proc.killed) proc.kill("SIGKILL");
-      }, SHUTDOWN_GRACE_MS);
+      this.trackedPid = null;
+    }
+  }
+
+  private killTree(): void {
+    const proc = this.process;
+    if (!proc || proc.pid == null) return;
+    const rootPid = proc.pid;
+    // Collect all descendant PIDs via pgrep -P recursion, then kill the tree.
+    const descendants: number[] = [rootPid];
+    try {
+      const visited = new Set<number>();
+      const stack = [rootPid];
+      while (stack.length) {
+        const parent = stack.pop()!;
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        const result = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
+        for (const line of result.toString().split("\n")) {
+          const trimmed = line.trim();
+          if (trimmed) {
+            const childPid = Number(trimmed);
+            if (Number.isFinite(childPid) && !visited.has(childPid)) {
+              descendants.push(childPid);
+              stack.push(childPid);
+            }
+          }
+        }
+      }
+    } catch {
+      // pgrep unavailable or process already gone — fall back to root only.
+    }
+    // SIGTERM children first, root last; then SIGKILL stragglers.
+    for (const pid of [...descendants].reverse()) {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+    }
+    setTimeout(() => {
+      for (const pid of [...descendants].reverse()) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+      }
+    }, SHUTDOWN_GRACE_MS);
+  }
+
+  private killTreeSync(): void {
+    // Synchronous variant for process exit hooks — setTimeout never fires
+    // inside 'exit', so we go straight to SIGKILL for the whole tree.
+    const proc = this.process;
+    if (!proc || proc.pid == null) return;
+    const rootPid = proc.pid;
+    const descendants: number[] = [rootPid];
+    try {
+      const visited = new Set<number>();
+      const stack = [rootPid];
+      while (stack.length) {
+        const parent = stack.pop()!;
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        const result = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
+        for (const line of result.toString().split("\n")) {
+          const trimmed = line.trim();
+          if (trimmed) {
+            const childPid = Number(trimmed);
+            if (Number.isFinite(childPid) && !visited.has(childPid)) {
+              descendants.push(childPid);
+              stack.push(childPid);
+            }
+          }
+        }
+      }
+    } catch {
+      // pgrep unavailable or process already gone.
+    }
+    for (const pid of [...descendants].reverse()) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+    }
+  }
+
+  reapOrphanedDsh(): void {
+    // Kill any lingering `dsh web` processes from a previous crashed session.
+    // Identified by matching the dsh bin path + "web" in the command line.
+    try {
+      const out = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] });
+      for (const line of out.toString().split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          const pid = Number(trimmed);
+          if (Number.isFinite(pid)) {
+            try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+          }
+        }
+      }
+    } catch {
+      // pgrep returns non-zero when no matches — no orphans, nothing to do.
     }
   }
 
@@ -179,16 +371,30 @@ export class DshManager {
 
   private async waitForReady(port: number): Promise<void> {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    // Phase 1: wait for TCP port to accept connections (webserver bound).
     while (Date.now() < deadline) {
       if (this.process === null) {
         throw new Error(
           `DSH process exited before becoming ready.\nStderr:\n${this.stderrLines.join("\n")}`
         );
       }
-      if (await this.checkPort(port)) return;
+      if (await this.checkPort(port)) break;
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
-    throw new Error(`DSH did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s`);
+    // Phase 2: wait for the API gateway to actually serve requests.
+    // The port opens early (webserver binds), but apiProxy and its 11
+    // dependencies take longer to activate. Loading the iframe before
+    // the API is ready causes client-side "N entries did not activate".
+    while (Date.now() < deadline) {
+      if (this.process === null) {
+        throw new Error(
+          `DSH process exited before API became ready.\nStderr:\n${this.stderrLines.join("\n")}`
+        );
+      }
+      if (await this.checkApiReady(port)) return;
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+    throw new Error(`DSH API did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s`);
   }
 
   private checkPort(port: number): Promise<boolean> {
@@ -202,6 +408,45 @@ export class DshManager {
         conn.destroy();
         resolve(false);
       });
+    });
+  }
+
+  private checkApiReady(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const body = JSON.stringify({
+        type: "client-request",
+        rpcId: "ready-probe",
+        method: "session.list",
+        payload: { cursor: null, limit: 1 },
+      });
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: "/api/session.list",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+          },
+          timeout: 3000,
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => (data += chunk.toString()));
+          res.on("end", () => {
+            // 200 with valid JSON-RPC envelope means apiProxy is live.
+            resolve(res.statusCode === 200 && data.includes("server-response"));
+          });
+        },
+      );
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.write(body);
+      req.end();
     });
   }
 }

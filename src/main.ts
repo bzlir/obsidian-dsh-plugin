@@ -9,6 +9,12 @@ export default class DshPlugin extends Plugin {
   async onload(): Promise<void> {
     this.dsh = new DshManager();
 
+    // Kill any orphaned dsh web processes from a previous crashed session.
+    // Obsidian's Cmd+Q may SIGKILL the Electron main process without giving
+    // plugins a chance to clean up, so dsh children survive. Reap them here
+    // so every Obsidian launch starts clean.
+    this.dsh.reapOrphanedDsh();
+
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this.dsh));
 
     this.addRibbonIcon("bot", "Open DSH", () => {
