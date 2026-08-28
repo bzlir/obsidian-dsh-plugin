@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, SettingGroup, SettingDefinitionItem, SettingDefinitionRender, SettingDefinitionGroup, ButtonComponent } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionRender, SettingDefinitionGroup, ButtonComponent } from "obsidian";
 import type DshPlugin from "./main";
 import { searchForDsh } from "./dsh-manager";
 import { dirname } from "path";
