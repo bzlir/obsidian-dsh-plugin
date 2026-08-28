@@ -304,11 +304,12 @@ export class DshManager {
     this.stderrLines = [];
 
     const resolved: ResolvedBin = this.resolved;
-    this.process = _spawn(
+    const child: TypedChildProcess = _spawn(
       resolved.node,
       [resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
       { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
     );
+    this.process = child;
 
     if (!this.exitHookInstalled) {
       this.exitHookInstalled = true;
