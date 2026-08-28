@@ -15,7 +15,8 @@ const _readdirSync = readdirSync as unknown as (path: string) => string[];
 const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _realpathSync = realpathSync as unknown as (path: string) => string;
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => Uint8Array;
-const _byteLength = Buffer.byteLength as unknown as (str: string) => number;
+const _Buffer = Buffer as unknown as { byteLength: (str: string) => number };
+const _byteLength = _Buffer.byteLength;
 
 // Minimal typed interfaces for process and spawned-process objects.
 interface TypedProcess {
@@ -63,9 +64,11 @@ interface TypedIncomingMessage {
 
 const _process = process as unknown as TypedProcess;
 const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
-const _createServer = net.createServer as unknown as () => TypedServer;
-const _createConnection = net.createConnection as unknown as (options: { host: string; port: number }, callback: () => void) => TypedSocket;
-const _httpRequest = http.request as unknown as (options: object, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest;
+const _net = net as unknown as { createServer: () => TypedServer; createConnection: (options: { host: string; port: number }, callback: () => void) => TypedSocket };
+const _createServer = _net.createServer;
+const _createConnection = _net.createConnection;
+const _http = http as unknown as { request: (options: object, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest };
+const _httpRequest = _http.request;
 
 const DSH_COMMAND = "dsh";
 const STARTUP_TIMEOUT_MS = 60_000;
