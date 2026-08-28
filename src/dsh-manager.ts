@@ -49,12 +49,12 @@ function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
 
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    execFileSync(
+    const result: string = execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
       { stdio: "pipe", timeout: 5000 }
-    );
-    return true;
+    ).toString();
+    return result !== undefined;
   } catch {
     return false;
   }
@@ -116,7 +116,7 @@ export function searchForDsh(): Promise<string[]> {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
-    child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+    child.stdout?.on("data", (d: string | Buffer) => (out += typeof d === "string" ? d : d.toString()));
     child.on("error", () => resolve([]));
     child.on("exit", () => {
       for (const line of out.split("\n")) {
@@ -223,8 +223,8 @@ export class DshManager {
 
     this.trackedPid = this.process.pid ?? null;
 
-    this.process.stderr?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n").filter((l) => l.trim());
+    this.process.stderr?.on("data", (data: string | Buffer) => {
+      const lines = (typeof data === "string" ? data : data.toString()).split("\n").filter((l) => l.trim());
       this.stderrLines.push(...lines);
       if (this.stderrLines.length > 50) {
         this.stderrLines = this.stderrLines.slice(-50);
