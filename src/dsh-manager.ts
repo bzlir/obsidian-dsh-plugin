@@ -1,7 +1,6 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { ChildProcess, spawn, execFileSync } from "child_process";
 import http from "http";
-import { createServer, createConnection } from "net";
+import * as net from "net";
 import { homedir } from "os";
 import { existsSync, readdirSync, realpathSync } from "fs";
 import { dirname, join } from "path";
@@ -17,93 +16,110 @@ interface ResolvedBin {
 }
 
 function candidateBinDirs(customPaths: string[] = []): string[] {
-  const home = homedir();
+  const home: string = homedir() as string;
   const dirs: string[] = [];
-  const nvmRoot = join(home, ".nvm", "versions", "node");
+  const nvmRoot: string = join(home, ".nvm", "versions", "node");
   try {
-    for (const ver of readdirSync(nvmRoot)) dirs.push(join(nvmRoot, ver, "bin"));
+    const entries: string[] = readdirSync(nvmRoot) as string[];
+    for (const ver of entries) {
+      const dir: string = join(nvmRoot, ver, "bin");
+      dirs.push(dir);
+    }
   } catch {
     // nvm not installed
   }
-  dirs.push("/opt/homebrew/bin", "/usr/local/bin");
-  dirs.push(join(home, ".volta", "bin"));
-  dirs.push(join(home, ".asdf", "shims"));
-  dirs.push(join(home, ".local", "bin"));
-  dirs.push(join(home, "bin"));
-  dirs.push(join(home, ".fnm", "aliases", "default", "bin"));
-  for (const p of customPaths) if (p) dirs.unshift(p);
+  const voltaBin: string = join(home, ".volta", "bin");
+  const asdfShims: string = join(home, ".asdf", "shims");
+  const localBin: string = join(home, ".local", "bin");
+  const homeBin: string = join(home, "bin");
+  const fnmBin: string = join(home, ".fnm", "aliases", "default", "bin");
+  dirs.push("/opt/homebrew/bin", "/usr/local/bin", voltaBin, asdfShims, localBin, homeBin, fnmBin);
+  for (const p of customPaths) {
+    if (p) dirs.unshift(p);
+  }
   return dirs;
 }
 
 function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
-  const base = process.env.PATH ?? "/usr/bin:/bin";
+  const base: string = (process.env.PATH as string | undefined) ?? "/usr/bin:/bin";
+  const baseParts: string[] = base.split(":");
   const prepend: string[] = [];
-  const seen = new Set(base.split(":"));
+  const seen: Set<string> = new Set(baseParts);
   for (const d of candidateBinDirs(customPaths)) {
     if (existsSync(d) && !seen.has(d)) {
       prepend.push(d);
       seen.add(d);
     }
   }
-  return { ...process.env, PATH: [...prepend, ...base.split(":")].join(":") };
+  const pathValue: string = [...prepend, ...baseParts].join(":");
+  return { ...process.env, PATH: pathValue };
 }
 
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    const result: string = execFileSync(
+    const result: Buffer = execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
       { stdio: "pipe", timeout: 5000 }
-    ).toString();
-    return result !== undefined;
+    ) as Buffer;
+    const output: string = result.toString();
+    return output !== undefined;
   } catch {
     return false;
   }
 }
 
 function resolveNodeFromDsh(dshAbs: string): string | null {
-  const binDir = dirname(dshAbs);
-  const nodePath = join(binDir, "node");
-  if (existsSync(nodePath) && checkNodeHasZstd(nodePath)) return nodePath;
+  const binDir: string = dirname(dshAbs);
+  const nodePath: string = join(binDir, "node");
+  if (existsSync(nodePath) && checkNodeHasZstd(nodePath)) {
+    return nodePath;
+  }
   return null;
 }
 
 function findInDirs(name: string, dirs: string[]): string | null {
   for (const d of dirs) {
-    const p = join(d, name);
-    if (existsSync(p)) return p;
+    const p: string = join(d, name);
+    if (existsSync(p)) {
+      return p;
+    }
   }
   return null;
 }
 
 async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | null> {
-  const dirs = candidateBinDirs(customPaths);
+  const dirs: string[] = candidateBinDirs(customPaths);
 
-  const dshAbs = findInDirs(DSH_COMMAND, dirs);
+  const dshAbs: string | null = findInDirs(DSH_COMMAND, dirs);
   if (!dshAbs) return null;
 
-  const dshScript = realpathSync(dshAbs);
+  const dshScript: string = realpathSync(dshAbs) as string;
 
-  let nodePath = resolveNodeFromDsh(dshAbs);
+  let nodePath: string | null = resolveNodeFromDsh(dshAbs);
   if (!nodePath) {
-    const candidate = findInDirs("node", dirs);
+    const candidate: string | null = findInDirs("node", dirs);
     if (candidate && checkNodeHasZstd(candidate)) {
       nodePath = candidate;
     }
   }
   if (!nodePath) return null;
 
-  return { node: nodePath, dshScript };
+  const resolved: ResolvedBin = { node: nodePath, dshScript };
+  return resolved;
 }
 
 export function searchForDsh(): Promise<string[]> {
-  return new Promise((resolve) => {
-    const results = new Set<string>();
+  return new Promise<string[]>((resolve) => {
+    const results: Set<string> = new Set();
     try {
-      const out: string = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }).toString();
+      const raw: Buffer = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }) as Buffer;
+      const out: string = raw.toString();
       for (const line of out.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed && trimmed.endsWith("/dsh")) results.add(trimmed);
+        const trimmed: string = line.trim();
+        if (trimmed && trimmed.endsWith("/dsh")) {
+          results.add(trimmed);
+        }
       }
     } catch {
       // mdfind unavailable or timed out
@@ -112,22 +128,35 @@ export function searchForDsh(): Promise<string[]> {
       resolve([...results]);
       return;
     }
-    const roots = [homedir(), "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
-    const child = spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
+    const home: string = homedir() as string;
+    const roots: string[] = [home, "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
+    const child: ChildProcess = spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
       stdio: ["pipe", "pipe", "pipe"],
-    });
-    let out = "";
-    child.stdout?.on("data", (d: string | Buffer) => (out += typeof d === "string" ? d : d.toString()));
+    }) as ChildProcess;
+    let out: string = "";
+    const stdout = child.stdout;
+    if (stdout) {
+      stdout.on("data", (d: string | Buffer) => {
+        const text: string = typeof d === "string" ? d : d.toString();
+        out += text;
+      });
+    }
     child.on("error", () => resolve([]));
     child.on("exit", () => {
       for (const line of out.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed && trimmed.endsWith("/dsh")) results.add(trimmed);
+        const trimmed: string = line.trim();
+        if (trimmed && trimmed.endsWith("/dsh")) {
+          results.add(trimmed);
+        }
       }
       resolve([...results]);
     });
     window.setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch { /* already dead */ }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
     }, 10_000);
   });
 }
@@ -135,17 +164,18 @@ export function searchForDsh(): Promise<string[]> {
 function collectDescendants(rootPid: number): number[] {
   const descendants: number[] = [rootPid];
   try {
-    const visited = new Set<number>();
-    const stack = [rootPid];
+    const visited: Set<number> = new Set();
+    const stack: number[] = [rootPid];
     while (stack.length) {
-      const parent = stack.pop()!;
+      const parent: number = stack.pop() as number;
       if (visited.has(parent)) continue;
       visited.add(parent);
-      const result: string = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] }).toString();
+      const raw: Buffer = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] }) as Buffer;
+      const result: string = raw.toString();
       for (const line of result.split("\n")) {
-        const trimmed = line.trim();
+        const trimmed: string = line.trim();
         if (trimmed) {
-          const childPid = Number(trimmed);
+          const childPid: number = Number(trimmed);
           if (Number.isFinite(childPid) && !visited.has(childPid)) {
             descendants.push(childPid);
             stack.push(childPid);
@@ -159,6 +189,12 @@ function collectDescendants(rootPid: number): number[] {
   return descendants;
 }
 
+interface ExitInfo {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}
+
 export class DshManager {
   private process: ChildProcess | null = null;
   private port: number | null = null;
@@ -167,20 +203,20 @@ export class DshManager {
   private exitHookInstalled = false;
   private trackedPid: number | null = null;
   private customPaths: string[] = [];
-  private onUnexpectedExit: ((info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }) => void) | null = null;
+  private onUnexpectedExit: ((info: ExitInfo) => void) | null = null;
 
-  setOnUnexpectedExit(cb: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }) => void): void {
+  setOnUnexpectedExit(cb: (info: ExitInfo) => void): void {
     this.onUnexpectedExit = cb;
   }
 
   setCustomPaths(paths: string[]): void {
-    this.customPaths = paths.filter((p) => p && p.trim().length > 0);
+    this.customPaths = paths.filter((p: string) => p && p.trim().length > 0);
     this.resolved = null;
   }
 
   async isAvailable(): Promise<boolean> {
     if (this.resolved) return true;
-    const bin = await resolveBin(this.customPaths);
+    const bin: ResolvedBin | null = await resolveBin(this.customPaths);
     if (bin) {
       this.resolved = bin;
       return true;
@@ -194,26 +230,31 @@ export class DshManager {
     }
     this.reapOrphanedDsh();
     if (!this.resolved) {
-      const bin = await resolveBin(this.customPaths);
+      const bin: ResolvedBin | null = await resolveBin(this.customPaths);
       if (!bin) throw new Error("DSH binary not found (need dsh + node>=22 with createZstdDecompress)");
       this.resolved = bin;
     }
-    const port = await this.findFreePort();
+    const port: number = await this.findFreePort();
     this.port = port;
     this.stderrLines = [];
 
+    const resolved: ResolvedBin = this.resolved;
     this.process = spawn(
-      this.resolved.node,
-      [this.resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
+      resolved.node,
+      [resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
       { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
-    );
+    ) as ChildProcess;
 
     if (!this.exitHookInstalled) {
       this.exitHookInstalled = true;
       const killSync = (): void => {
-        const pid = this.trackedPid;
+        const pid: number | null = this.trackedPid;
         if (pid == null) return;
-        try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already dead
+        }
       };
       process.on("exit", killSync);
       process.on("SIGTERM", killSync);
@@ -222,32 +263,39 @@ export class DshManager {
       process.on("SIGHUP", killSync);
     }
 
-    this.trackedPid = this.process.pid ?? null;
+    this.trackedPid = (this.process.pid as number | undefined) ?? null;
 
-    this.process.stderr?.on("data", (data: string | Buffer) => {
-      const lines = (typeof data === "string" ? data : data.toString()).split("\n").filter((l) => l.trim());
-      this.stderrLines.push(...lines);
-      if (this.stderrLines.length > 50) {
-        this.stderrLines = this.stderrLines.slice(-50);
-      }
-    });
+    const stderr = this.process.stderr;
+    if (stderr) {
+      stderr.on("data", (data: string | Buffer) => {
+        const text: string = typeof data === "string" ? data : data.toString();
+        const lines: string[] = text.split("\n").filter((l: string) => l.trim());
+        this.stderrLines.push(...lines);
+        if (this.stderrLines.length > 50) {
+          this.stderrLines = this.stderrLines.slice(-50);
+        }
+      });
+    }
 
-    this.process.on("exit", (code, signal) => {
-      const wasRunning = this.process !== null;
+    const proc: ChildProcess = this.process;
+    proc.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      const wasRunning: boolean = this.process !== null;
       this.process = null;
       if (wasRunning && this.onUnexpectedExit) {
-        this.onUnexpectedExit({
+        const info: ExitInfo = {
           code,
           signal,
           stderr: this.stderrLines.join("\n"),
-        });
+        };
+        this.onUnexpectedExit(info);
       }
     });
 
-    this.process.on("error", (err: Error) => {
+    proc.on("error", (err: Error) => {
       this.process = null;
       if (this.onUnexpectedExit) {
-        this.onUnexpectedExit({ code: null, signal: null, stderr: err.message });
+        const info: ExitInfo = { code: null, signal: null, stderr: err.message };
+        this.onUnexpectedExit(info);
       }
     });
 
@@ -257,15 +305,15 @@ export class DshManager {
   }
 
   private async ensureWorkspace(port: number, vaultPath: string): Promise<void> {
-    const body = JSON.stringify({
+    const body: string = JSON.stringify({
       type: "client-request",
       rpcId: "workspace-init",
       method: "workspace.create",
       payload: { path: vaultPath },
     });
     try {
-      const ok = await new Promise<boolean>((resolve) => {
-        const req = http.request(
+      const ok: boolean = await new Promise<boolean>((resolve) => {
+        const req: http.ClientRequest = http.request(
           {
             hostname: "127.0.0.1",
             port,
@@ -277,11 +325,14 @@ export class DshManager {
             },
             timeout: 10_000,
           },
-          (res) => {
-            let data = "";
-            res.on("data", (chunk: Buffer) => (data += chunk.toString()));
+          (res: http.IncomingMessage) => {
+            let data: string = "";
+            res.on("data", (chunk: Buffer) => {
+              data += chunk.toString();
+            });
             res.on("end", () => {
-              resolve(res.statusCode === 200 && data.includes("server-response"));
+              const statusCode: number = res.statusCode as number;
+              resolve(statusCode === 200 && data.includes("server-response"));
             });
           },
         );
@@ -295,7 +346,8 @@ export class DshManager {
       });
       if (!ok) console.warn("[DSH] workspace.create call may have failed");
     } catch (err: unknown) {
-      console.warn("[DSH] failed to add vault as workspace:", (err as Error).message);
+      const error: Error = err as Error;
+      console.warn("[DSH] failed to add vault as workspace:", error.message);
     }
   }
 
@@ -308,29 +360,44 @@ export class DshManager {
   }
 
   private killTree(): void {
-    const proc = this.process;
-    if (!proc || proc.pid == null) return;
-    const rootPid = proc.pid;
-    const descendants = collectDescendants(rootPid);
-    for (const pid of [...descendants].reverse()) {
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+    const proc: ChildProcess | null = this.process;
+    if (!proc) return;
+    const rootPid: number | undefined = proc.pid;
+    if (rootPid == null) return;
+    const descendants: number[] = collectDescendants(rootPid);
+    const reversed: number[] = [...descendants].reverse();
+    for (const pid of reversed) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // already dead
+      }
     }
     window.setTimeout(() => {
-      for (const pid of [...descendants].reverse()) {
-        try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+      for (const pid of reversed) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already dead
+        }
       }
     }, SHUTDOWN_GRACE_MS);
   }
 
   reapOrphanedDsh(): void {
     try {
-      const out: string = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] }).toString();
+      const raw: Buffer = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] }) as Buffer;
+      const out: string = raw.toString();
       for (const line of out.split("\n")) {
-        const trimmed = line.trim();
+        const trimmed: string = line.trim();
         if (trimmed) {
-          const pid = Number(trimmed);
+          const pid: number = Number(trimmed);
           if (Number.isFinite(pid)) {
-            try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              // already dead
+            }
           }
         }
       }
@@ -348,12 +415,13 @@ export class DshManager {
   }
 
   private findFreePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const server = createServer();
+    return new Promise<number>((resolve, reject) => {
+      const server: net.Server = net.createServer() as net.Server;
       server.listen(0, "127.0.0.1", () => {
-        const addr = server.address();
+        const addr: net.AddressInfo | string | null = server.address() as net.AddressInfo | string | null;
         if (addr && typeof addr === "object") {
-          const port = addr.port;
+          const addrInfo: net.AddressInfo = addr as net.AddressInfo;
+          const port: number = addrInfo.port;
           server.close(() => resolve(port));
         } else {
           server.close();
@@ -365,15 +433,16 @@ export class DshManager {
   }
 
   private async waitForReady(port: number): Promise<void> {
-    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    const deadline: number = Date.now() + STARTUP_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (this.process === null) {
         throw new Error(
           `DSH process exited before becoming ready.\nStderr:\n${this.stderrLines.join("\n")}`
         );
       }
-      if (await this.checkPort(port)) break;
-      await new Promise((r) => window.setTimeout(r, POLL_INTERVAL_MS));
+      const ready: boolean = await this.checkPort(port);
+      if (ready) break;
+      await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
     while (Date.now() < deadline) {
       if (this.process === null) {
@@ -381,18 +450,19 @@ export class DshManager {
           `DSH process exited before API became ready.\nStderr:\n${this.stderrLines.join("\n")}`
         );
       }
-      if (await this.checkApiReady(port)) return;
-      await new Promise((r) => window.setTimeout(r, POLL_INTERVAL_MS));
+      const ready: boolean = await this.checkApiReady(port);
+      if (ready) return;
+      await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
     throw new Error(`DSH API did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s`);
   }
 
   private checkPort(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const conn = createConnection({ host: "127.0.0.1", port }, () => {
+    return new Promise<boolean>((resolve) => {
+      const conn: net.Socket = net.createConnection({ host: "127.0.0.1", port }, () => {
         conn.destroy();
         resolve(true);
-      });
+      }) as net.Socket;
       conn.on("error", () => resolve(false));
       conn.setTimeout(1000, () => {
         conn.destroy();
@@ -402,14 +472,14 @@ export class DshManager {
   }
 
   private checkApiReady(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const body = JSON.stringify({
+    return new Promise<boolean>((resolve) => {
+      const body: string = JSON.stringify({
         type: "client-request",
         rpcId: "ready-probe",
         method: "session.list",
         payload: { cursor: null, limit: 1 },
       });
-      const req = http.request(
+      const req: http.ClientRequest = http.request(
         {
           hostname: "127.0.0.1",
           port,
@@ -421,11 +491,14 @@ export class DshManager {
           },
           timeout: 3000,
         },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk: Buffer) => (data += chunk.toString()));
+        (res: http.IncomingMessage) => {
+          let data: string = "";
+          res.on("data", (chunk: Buffer) => {
+            data += chunk.toString();
+          });
           res.on("end", () => {
-            resolve(res.statusCode === 200 && data.includes("server-response"));
+            const statusCode: number = res.statusCode as number;
+            resolve(statusCode === 200 && data.includes("server-response"));
           });
         },
       );

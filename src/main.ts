@@ -52,7 +52,8 @@ export default class DshPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data: unknown = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data as Partial<DshPluginSettings>);
   }
 
   async saveSettings(): Promise<void> {
