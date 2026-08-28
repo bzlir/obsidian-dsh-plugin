@@ -29,10 +29,7 @@ export class DshView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("dsh-view-content");
 
-    this.statusEl = this.contentEl.createEl("div", {
-      text: "Starting DSH...",
-      cls: "dsh-status",
-    });
+    this.statusEl = this.contentEl.createDiv({ text: "Starting DSH...", cls: "dsh-status" });
 
     this.dsh.setOnUnexpectedExit((info) => {
       this.showStatus(
@@ -76,7 +73,7 @@ export class DshView extends ItemView {
 
   private showStatus(msg: string): void {
     if (!this.statusEl) {
-      this.statusEl = this.contentEl.createEl("div", { cls: "dsh-status" });
+      this.statusEl = this.contentEl.createDiv({ cls: "dsh-status" });
     }
     this.statusEl.empty();
     this.statusEl.show();
