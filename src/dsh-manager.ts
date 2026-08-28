@@ -29,8 +29,7 @@ interface TypedStream {
   pid: number | undefined;
   stdout: TypedStream | null;
   stderr: TypedStream | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  on: (event: string, listener: (...args: any[]) => void) => void;
+  on: (event: string, listener: (...args: never[]) => void) => void;
   kill: (signal: string) => void;
 }
 
@@ -46,8 +45,7 @@ interface TypedServer {
 }
 
 interface TypedClientRequest {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  on: (event: string, listener: (...args: any[]) => void) => void;
+  on: (event: string, listener: (...args: never[]) => void) => void;
   destroy: () => void;
   write: (data: string) => void;
   end: () => void;
@@ -55,8 +53,7 @@ interface TypedClientRequest {
 
 interface TypedIncomingMessage {
   statusCode: number | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  on: (event: string, listener: (...args: any[]) => void) => void;
+  on: (event: string, listener: (...args: never[]) => void) => void;
 }
 
 const _process = process as unknown as TypedProcess;
