@@ -1,4 +1,4 @@
-import { ChildProcess, spawn, execFileSync } from "child_process";
+import { spawn, execFileSync } from "child_process";
 import http from "http";
 import * as net from "net";
 import { homedir } from "os";
