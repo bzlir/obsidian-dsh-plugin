@@ -1,23 +1,19 @@
 {
   "name": "obsidian-dsh-plugin",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Host DeepSeek Harness (dsh) inside Obsidian",
   "main": "main.js",
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "lint": "eslint ."
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
     "@types/node": "^22.15.0",
     "esbuild": "^0.20.0",
-    "eslint": "^9.39.4",
     "obsidian": "^1.7.0",
     "tslib": "^2.6.0",
-    "typescript": "^5.3.0",
-    "typescript-eslint": "^8.59.1"
+    "typescript": "^5.3.0"
   }
 }

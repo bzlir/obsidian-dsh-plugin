@@ -25,7 +25,9 @@ interface TypedProcess {
 
 interface TypedStream {
   on: (event: string, listener: (data: string | Buffer) => void) => void;
-}interface TypedChildProcess {
+}
+
+interface TypedChildProcess {
   pid: number | undefined;
   stdout: TypedStream | null;
   stderr: TypedStream | null;
@@ -38,7 +40,9 @@ interface TypedServer {
   address: () => { port: number } | string | null;
   close: (callback?: () => void) => void;
   on: (event: string, listener: (err: Error) => void) => void;
-}interface TypedSocket {
+}
+
+interface TypedSocket {
   destroy: () => void;
   on: (event: string, listener: (err: Error) => void) => void;
   setTimeout: (timeout: number, callback: () => void) => void;
