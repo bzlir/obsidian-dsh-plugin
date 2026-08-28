@@ -3,6 +3,8 @@ import type DshPlugin from "./main";
 import { searchForDsh } from "./dsh-manager";
 import { dirname } from "path";
 
+const _dirname = dirname as unknown as (path: string) => string;
+
 export class DshSettingTab extends PluginSettingTab {
   private plugin: DshPlugin;
   private searchInProgress = false;
@@ -116,7 +118,7 @@ export class DshSettingTab extends PluginSettingTab {
       }
       let added = 0;
       for (const dshPath of found) {
-        const dir: string = dirname(dshPath) as string;
+        const dir: string = _dirname(dshPath);
         if (!this.plugin.settings.customPaths.includes(dir)) {
           this.plugin.settings.customPaths.push(dir);
           added++;

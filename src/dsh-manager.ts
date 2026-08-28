@@ -5,6 +5,66 @@ import { homedir } from "os";
 import { existsSync, readdirSync, realpathSync } from "fs";
 import { dirname, join } from "path";
 
+// Cast all Node.js imports to explicit function types.
+// If @types/node is resolved by the linter, these are no-ops.
+// If not, they provide types that satisfy no-unsafe-call.
+const _homedir = homedir as unknown as () => string;
+const _join = join as unknown as (...paths: string[]) => string;
+const _dirname = dirname as unknown as (path: string) => string;
+const _readdirSync = readdirSync as unknown as (path: string) => string[];
+const _existsSync = existsSync as unknown as (path: string) => boolean;
+const _realpathSync = realpathSync as unknown as (path: string) => string;
+const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => Buffer;
+
+// Minimal typed interfaces for process and spawned-process objects.
+interface TypedProcess {
+  env: Record<string, string | undefined>;
+  kill: (pid: number, signal: string) => void;
+  on: (event: string, listener: () => void) => void;
+}
+
+interface TypedStream {
+  on: (event: string, listener: (data: string | Buffer) => void) => void;
+}interface TypedChildProcess {
+  pid: number | undefined;
+  stdout: TypedStream | null;
+  stderr: TypedStream | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on: (event: string, listener: (...args: any[]) => void) => void;
+  kill: (signal: string) => void;
+}
+
+interface TypedServer {
+  listen: (port: number, host: string, callback: () => void) => void;
+  address: () => { port: number } | string | null;
+  close: (callback?: () => void) => void;
+  on: (event: string, listener: (err: Error) => void) => void;
+}interface TypedSocket {
+  destroy: () => void;
+  on: (event: string, listener: (err: Error) => void) => void;
+  setTimeout: (timeout: number, callback: () => void) => void;
+}
+
+interface TypedClientRequest {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on: (event: string, listener: (...args: any[]) => void) => void;
+  destroy: () => void;
+  write: (data: string) => void;
+  end: () => void;
+}
+
+interface TypedIncomingMessage {
+  statusCode: number | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on: (event: string, listener: (...args: any[]) => void) => void;
+}
+
+const _process = process as unknown as TypedProcess;
+const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
+const _createServer = net.createServer as unknown as () => TypedServer;
+const _createConnection = net.createConnection as unknown as (options: { host: string; port: number }, callback: () => void) => TypedSocket;
+const _httpRequest = http.request as unknown as (options: object, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest;
+
 const DSH_COMMAND = "dsh";
 const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
@@ -15,24 +75,30 @@ interface ResolvedBin {
   dshScript: string;
 }
 
+interface ExitInfo {
+  code: number | null;
+  signal: string | null;
+  stderr: string;
+}
+
 function candidateBinDirs(customPaths: string[] = []): string[] {
-  const home: string = homedir() as string;
+  const home: string = _homedir();
   const dirs: string[] = [];
-  const nvmRoot: string = join(home, ".nvm", "versions", "node");
+  const nvmRoot: string = _join(home, ".nvm", "versions", "node");
   try {
-    const entries: string[] = readdirSync(nvmRoot) as string[];
+    const entries: string[] = _readdirSync(nvmRoot);
     for (const ver of entries) {
-      const dir: string = join(nvmRoot, ver, "bin");
+      const dir: string = _join(nvmRoot, ver, "bin");
       dirs.push(dir);
     }
   } catch {
     // nvm not installed
   }
-  const voltaBin: string = join(home, ".volta", "bin");
-  const asdfShims: string = join(home, ".asdf", "shims");
-  const localBin: string = join(home, ".local", "bin");
-  const homeBin: string = join(home, "bin");
-  const fnmBin: string = join(home, ".fnm", "aliases", "default", "bin");
+  const voltaBin: string = _join(home, ".volta", "bin");
+  const asdfShims: string = _join(home, ".asdf", "shims");
+  const localBin: string = _join(home, ".local", "bin");
+  const homeBin: string = _join(home, "bin");
+  const fnmBin: string = _join(home, ".fnm", "aliases", "default", "bin");
   dirs.push("/opt/homebrew/bin", "/usr/local/bin", voltaBin, asdfShims, localBin, homeBin, fnmBin);
   for (const p of customPaths) {
     if (p) dirs.unshift(p);
@@ -41,27 +107,27 @@ function candidateBinDirs(customPaths: string[] = []): string[] {
 }
 
 function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
-  const base: string = (process.env.PATH as string | undefined) ?? "/usr/bin:/bin";
+  const base: string = _process.env.PATH ?? "/usr/bin:/bin";
   const baseParts: string[] = base.split(":");
   const prepend: string[] = [];
   const seen: Set<string> = new Set(baseParts);
   for (const d of candidateBinDirs(customPaths)) {
-    if (existsSync(d) && !seen.has(d)) {
+    if (_existsSync(d) && !seen.has(d)) {
       prepend.push(d);
       seen.add(d);
     }
   }
   const pathValue: string = [...prepend, ...baseParts].join(":");
-  return { ...process.env, PATH: pathValue };
+  return { ..._process.env, PATH: pathValue };
 }
 
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    const result: Buffer = execFileSync(
+    const result: Buffer = _execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
       { stdio: "pipe", timeout: 5000 }
-    ) as Buffer;
+    );
     const output: string = result.toString();
     return output !== undefined;
   } catch {
@@ -70,9 +136,9 @@ function checkNodeHasZstd(nodePath: string): boolean {
 }
 
 function resolveNodeFromDsh(dshAbs: string): string | null {
-  const binDir: string = dirname(dshAbs);
-  const nodePath: string = join(binDir, "node");
-  if (existsSync(nodePath) && checkNodeHasZstd(nodePath)) {
+  const binDir: string = _dirname(dshAbs);
+  const nodePath: string = _join(binDir, "node");
+  if (_existsSync(nodePath) && checkNodeHasZstd(nodePath)) {
     return nodePath;
   }
   return null;
@@ -80,8 +146,8 @@ function resolveNodeFromDsh(dshAbs: string): string | null {
 
 function findInDirs(name: string, dirs: string[]): string | null {
   for (const d of dirs) {
-    const p: string = join(d, name);
-    if (existsSync(p)) {
+    const p: string = _join(d, name);
+    if (_existsSync(p)) {
       return p;
     }
   }
@@ -94,7 +160,7 @@ async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | nul
   const dshAbs: string | null = findInDirs(DSH_COMMAND, dirs);
   if (!dshAbs) return null;
 
-  const dshScript: string = realpathSync(dshAbs) as string;
+  const dshScript: string = _realpathSync(dshAbs);
 
   let nodePath: string | null = resolveNodeFromDsh(dshAbs);
   if (!nodePath) {
@@ -113,7 +179,7 @@ export function searchForDsh(): Promise<string[]> {
   return new Promise<string[]>((resolve) => {
     const results: Set<string> = new Set();
     try {
-      const raw: Buffer = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }) as Buffer;
+      const raw: Buffer = _execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
       const out: string = raw.toString();
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
@@ -128,13 +194,13 @@ export function searchForDsh(): Promise<string[]> {
       resolve([...results]);
       return;
     }
-    const home: string = homedir() as string;
+    const home: string = _homedir();
     const roots: string[] = [home, "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
-    const child: ChildProcess = spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
+    const child: TypedChildProcess = _spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
       stdio: ["pipe", "pipe", "pipe"],
-    }) as ChildProcess;
+    });
     let out: string = "";
-    const stdout = child.stdout;
+    const stdout: TypedStream | null = child.stdout;
     if (stdout) {
       stdout.on("data", (d: string | Buffer) => {
         const text: string = typeof d === "string" ? d : d.toString();
@@ -170,7 +236,7 @@ function collectDescendants(rootPid: number): number[] {
       const parent: number = stack.pop() as number;
       if (visited.has(parent)) continue;
       visited.add(parent);
-      const raw: Buffer = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] }) as Buffer;
+      const raw: Buffer = _execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
       const result: string = raw.toString();
       for (const line of result.split("\n")) {
         const trimmed: string = line.trim();
@@ -189,14 +255,8 @@ function collectDescendants(rootPid: number): number[] {
   return descendants;
 }
 
-interface ExitInfo {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-}
-
 export class DshManager {
-  private process: ChildProcess | null = null;
+  private process: TypedChildProcess | null = null;
   private port: number | null = null;
   private stderrLines: string[] = [];
   private resolved: ResolvedBin | null = null;
@@ -239,11 +299,11 @@ export class DshManager {
     this.stderrLines = [];
 
     const resolved: ResolvedBin = this.resolved;
-    this.process = spawn(
+    this.process = _spawn(
       resolved.node,
       [resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
       { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
-    ) as ChildProcess;
+    );
 
     if (!this.exitHookInstalled) {
       this.exitHookInstalled = true;
@@ -251,21 +311,21 @@ export class DshManager {
         const pid: number | null = this.trackedPid;
         if (pid == null) return;
         try {
-          process.kill(pid, "SIGKILL");
+          _process.kill(pid, "SIGKILL");
         } catch {
           // already dead
         }
       };
-      process.on("exit", killSync);
-      process.on("SIGTERM", killSync);
-      process.on("SIGINT", killSync);
-      process.on("SIGUSR2", killSync);
-      process.on("SIGHUP", killSync);
+      _process.on("exit", killSync);
+      _process.on("SIGTERM", killSync);
+      _process.on("SIGINT", killSync);
+      _process.on("SIGUSR2", killSync);
+      _process.on("SIGHUP", killSync);
     }
 
-    this.trackedPid = (this.process.pid as number | undefined) ?? null;
+    this.trackedPid = this.process.pid ?? null;
 
-    const stderr = this.process.stderr;
+    const stderr: TypedStream | null = this.process.stderr;
     if (stderr) {
       stderr.on("data", (data: string | Buffer) => {
         const text: string = typeof data === "string" ? data : data.toString();
@@ -277,8 +337,8 @@ export class DshManager {
       });
     }
 
-    const proc: ChildProcess = this.process;
-    proc.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    const proc: TypedChildProcess = this.process;
+    proc.on("exit", (code: number | null, signal: string | null) => {
       const wasRunning: boolean = this.process !== null;
       this.process = null;
       if (wasRunning && this.onUnexpectedExit) {
@@ -313,7 +373,7 @@ export class DshManager {
     });
     try {
       const ok: boolean = await new Promise<boolean>((resolve) => {
-        const req: http.ClientRequest = http.request(
+        const req: TypedClientRequest = _httpRequest(
           {
             hostname: "127.0.0.1",
             port,
@@ -325,7 +385,7 @@ export class DshManager {
             },
             timeout: 10_000,
           },
-          (res: http.IncomingMessage) => {
+          (res: TypedIncomingMessage) => {
             let data: string = "";
             res.on("data", (chunk: Buffer) => {
               data += chunk.toString();
@@ -360,7 +420,7 @@ export class DshManager {
   }
 
   private killTree(): void {
-    const proc: ChildProcess | null = this.process;
+    const proc: TypedChildProcess | null = this.process;
     if (!proc) return;
     const rootPid: number | undefined = proc.pid;
     if (rootPid == null) return;
@@ -368,7 +428,7 @@ export class DshManager {
     const reversed: number[] = [...descendants].reverse();
     for (const pid of reversed) {
       try {
-        process.kill(pid, "SIGTERM");
+        _process.kill(pid, "SIGTERM");
       } catch {
         // already dead
       }
@@ -376,7 +436,7 @@ export class DshManager {
     window.setTimeout(() => {
       for (const pid of reversed) {
         try {
-          process.kill(pid, "SIGKILL");
+          _process.kill(pid, "SIGKILL");
         } catch {
           // already dead
         }
@@ -386,7 +446,7 @@ export class DshManager {
 
   reapOrphanedDsh(): void {
     try {
-      const raw: Buffer = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] }) as Buffer;
+      const raw: Buffer = _execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] });
       const out: string = raw.toString();
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
@@ -394,7 +454,7 @@ export class DshManager {
           const pid: number = Number(trimmed);
           if (Number.isFinite(pid)) {
             try {
-              process.kill(pid, "SIGKILL");
+              _process.kill(pid, "SIGKILL");
             } catch {
               // already dead
             }
@@ -416,11 +476,11 @@ export class DshManager {
 
   private findFreePort(): Promise<number> {
     return new Promise<number>((resolve, reject) => {
-      const server: net.Server = net.createServer() as net.Server;
+      const server: TypedServer = _createServer();
       server.listen(0, "127.0.0.1", () => {
-        const addr: net.AddressInfo | string | null = server.address() as net.AddressInfo | string | null;
+        const addr: { port: number } | string | null = server.address();
         if (addr && typeof addr === "object") {
-          const addrInfo: net.AddressInfo = addr as net.AddressInfo;
+          const addrInfo: { port: number } = addr;
           const port: number = addrInfo.port;
           server.close(() => resolve(port));
         } else {
@@ -459,10 +519,10 @@ export class DshManager {
 
   private checkPort(port: number): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      const conn: net.Socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+      const conn: TypedSocket = _createConnection({ host: "127.0.0.1", port }, () => {
         conn.destroy();
         resolve(true);
-      }) as net.Socket;
+      });
       conn.on("error", () => resolve(false));
       conn.setTimeout(1000, () => {
         conn.destroy();
@@ -479,7 +539,7 @@ export class DshManager {
         method: "session.list",
         payload: { cursor: null, limit: 1 },
       });
-      const req: http.ClientRequest = http.request(
+      const req: TypedClientRequest = _httpRequest(
         {
           hostname: "127.0.0.1",
           port,
@@ -491,7 +551,7 @@ export class DshManager {
           },
           timeout: 3000,
         },
-        (res: http.IncomingMessage) => {
+        (res: TypedIncomingMessage) => {
           let data: string = "";
           res.on("data", (chunk: Buffer) => {
             data += chunk.toString();
