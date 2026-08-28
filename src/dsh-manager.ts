@@ -15,7 +15,7 @@ interface ResolvedBin {
   dshScript: string;
 }
 
-function candidateBinDirs(): string[] {
+function candidateBinDirs(customPaths: string[] = []): string[] {
   const home = homedir();
   const dirs: string[] = [];
   const nvmRoot = join(home, ".nvm", "versions", "node");
@@ -27,14 +27,19 @@ function candidateBinDirs(): string[] {
   dirs.push("/opt/homebrew/bin", "/usr/local/bin");
   dirs.push(join(home, ".volta", "bin"));
   dirs.push(join(home, ".asdf", "shims"));
+  dirs.push(join(home, ".local", "bin"));
+  dirs.push(join(home, "bin"));
+  dirs.push(join(home, ".fnm", "aliases", "default", "bin"));
+  // User-provided paths from plugin settings — highest priority, prepended.
+  for (const p of customPaths) if (p) dirs.unshift(p);
   return dirs;
 }
 
-function augmentedEnv(): NodeJS.ProcessEnv {
+function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
   const base = process.env.PATH ?? "/usr/bin:/bin";
   const prepend: string[] = [];
   const seen = new Set(base.split(":"));
-  for (const d of candidateBinDirs()) {
+  for (const d of candidateBinDirs(customPaths)) {
     if (existsSync(d) && !seen.has(d)) {
       prepend.push(d);
       seen.add(d);
@@ -83,9 +88,9 @@ function findInDirs(name: string, dirs: string[]): string | null {
   return null;
 }
 
-async function resolveBin(): Promise<ResolvedBin | null> {
-  const env = augmentedEnv();
-  const dirs = candidateBinDirs();
+async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | null> {
+  const env = augmentedEnv(customPaths);
+  const dirs = candidateBinDirs(customPaths);
 
   const dshAbs = findInDirs(DSH_COMMAND, dirs);
   if (!dshAbs) return null;
@@ -104,6 +109,51 @@ async function resolveBin(): Promise<ResolvedBin | null> {
   return { node: nodePath, dshScript };
 }
 
+/**
+ * Search the filesystem for `dsh` binaries.
+ * Tries macOS Spotlight (mdfind) first — fast, indexed. Falls back to a
+ * bounded `find` over common install roots. Returns deduplicated paths
+ * whose parent directory could be added to customPaths.
+ */
+export function searchForDsh(): Promise<string[]> {
+  return new Promise((resolve) => {
+    const results = new Set<string>();
+    // Phase 1: macOS Spotlight (instant if available).
+    try {
+      const out = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }).toString();
+      for (const line of out.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed && trimmed.endsWith("/dsh")) results.add(trimmed);
+      }
+    } catch {
+      // mdfind unavailable (non-macOS) or timed out — fall through to find.
+    }
+    if (results.size > 0) {
+      resolve([...results]);
+      return;
+    }
+    // Phase 2: bounded find over common roots.
+    const roots = [homedir(), "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
+    const child = spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+    child.on("error", () => resolve([]));
+    child.on("exit", () => {
+      for (const line of out.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed && trimmed.endsWith("/dsh")) results.add(trimmed);
+      }
+      resolve([...results]);
+    });
+    // Safety timeout.
+    setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* already dead */ }
+    }, 10_000);
+  });
+}
+
 export class DshManager {
   private process: ChildProcess | null = null;
   private port: number | null = null;
@@ -111,15 +161,22 @@ export class DshManager {
   private resolved: ResolvedBin | null = null;
   private exitHookInstalled = false;
   private trackedPid: number | null = null;
+  private customPaths: string[] = [];
   private onUnexpectedExit: ((info: { code: number | null; signal: string | null; stderr: string }) => void) | null = null;
 
   setOnUnexpectedExit(cb: (info: { code: number | null; signal: string | null; stderr: string }) => void): void {
     this.onUnexpectedExit = cb;
   }
 
+  setCustomPaths(paths: string[]): void {
+    this.customPaths = paths.filter((p) => p && p.trim().length > 0);
+    // Invalidate cached resolution so next isAvailable/start re-resolves.
+    this.resolved = null;
+  }
+
   async isAvailable(): Promise<boolean> {
     if (this.resolved) return true;
-    const bin = await resolveBin();
+    const bin = await resolveBin(this.customPaths);
     if (bin) {
       this.resolved = bin;
       return true;
@@ -135,7 +192,7 @@ export class DshManager {
     // They would otherwise pile up on every plugin reload / Obsidian restart.
     this.reapOrphanedDsh();
     if (!this.resolved) {
-      const bin = await resolveBin();
+      const bin = await resolveBin(this.customPaths);
       if (!bin) throw new Error("DSH binary not found (need dsh + node>=22 with createZstdDecompress)");
       this.resolved = bin;
     }
@@ -146,7 +203,7 @@ export class DshManager {
     this.process = spawn(
       this.resolved.node,
       [this.resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
-      { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() }
+      { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
     );
 
     // Install process-exit guard the first time we spawn, so a hard kill of
