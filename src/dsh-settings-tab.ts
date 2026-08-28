@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import { App, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionRender, SettingDefinitionGroup, ButtonComponent } from "obsidian";
 import type DshPlugin from "./main";
 import { searchForDsh } from "./dsh-manager";
