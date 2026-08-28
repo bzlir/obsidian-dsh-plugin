@@ -34,7 +34,7 @@ npm install
 npm run build
 ```
 
-然后将 `main.js`、`manifest.json`、`styles.css` 复制到 Vault 的 `.obsidian/plugins/dsh-in-obsidian/` 目录下。
+然后将 `main.js`、`manifest.json`、`styles.css` 复制到 Vault 的 `.obsidian/plugins/dsh-embedded/` 目录下。
 
 > **提示**：本仓库附带辅助脚本（`scripts/install.sh`、`scripts/rollback.sh`、`scripts/uninstall.sh`），可自动完成构建、安装（支持回滚）和卸载。执行 `npm install` 后运行 `bash scripts/install.sh` 即可。
 

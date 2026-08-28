@@ -34,7 +34,7 @@ npm install
 npm run build
 ```
 
-Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsidian/plugins/dsh-in-obsidian/` directory.
+Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsidian/plugins/dsh-embedded/` directory.
 
 > **Tip**: This repo ships helper scripts (`scripts/install.sh`, `scripts/rollback.sh`, `scripts/uninstall.sh`) that automate building, installing with rollback support, and cleanup. Run `bash scripts/install.sh` after `npm install`.
 
