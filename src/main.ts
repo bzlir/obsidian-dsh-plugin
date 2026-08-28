@@ -83,13 +83,13 @@ export default class DshPlugin extends Plugin {
 
     const existing = this.app.workspace.getLeavesOfType(DSH_VIEW_TYPE);
     if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]);
+      void this.app.workspace.revealLeaf(existing[0]);
       return;
     }
 
     const leaf = this.app.workspace.getRightLeaf(false);
     if (!leaf) return;
     await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    void this.app.workspace.revealLeaf(leaf);
   }
 }
