@@ -166,9 +166,9 @@ export class DshManager {
   private exitHookInstalled = false;
   private trackedPid: number | null = null;
   private customPaths: string[] = [];
-  private onUnexpectedExit: ((info: { code: number | null; signal: string | null; stderr: string }) => void) | null = null;
+  private onUnexpectedExit: ((info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }) => void) | null = null;
 
-  setOnUnexpectedExit(cb: (info: { code: number | null; signal: string | null; stderr: string }) => void): void {
+  setOnUnexpectedExit(cb: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string }) => void): void {
     this.onUnexpectedExit = cb;
   }
 
@@ -231,7 +231,7 @@ export class DshManager {
       }
     });
 
-    this.process.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    this.process.on("exit", (code, signal) => {
       const wasRunning = this.process !== null;
       this.process = null;
       if (wasRunning && this.onUnexpectedExit) {
