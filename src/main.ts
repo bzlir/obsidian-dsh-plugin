@@ -33,8 +33,11 @@ export default class DshPlugin extends Plugin {
       this.openDshView();
     });
     const svgEl = ribbonItem.querySelector("svg");
-    if (svgEl) {
-      svgEl.outerHTML = DSH_ICON_SVG;
+    if (svgEl && svgEl.parentNode) {
+      const range = document.createRange();
+      const fragment = range.createContextualFragment(DSH_ICON_SVG);
+      svgEl.parentNode.replaceChild(fragment.firstChild as Node, svgEl);
+      range.detach();
     }
 
     this.addCommand({

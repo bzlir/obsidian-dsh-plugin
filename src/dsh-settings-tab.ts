@@ -16,12 +16,12 @@ export class DshSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h3", { text: "DSH search paths" });
+    new Setting(containerEl)
+      .setName("DSH search paths")
+      .setHeading();
 
-    containerEl.createEl("p", {
-      text: "Additional directories to search for the dsh and node binaries. The plugin auto-scans nvm, Homebrew, Volta, asdf, fnm, ~/.local/bin, and ~/bin. Add a custom path below if dsh is installed elsewhere.",
-      cls: "setting-item-description",
-    });
+    new Setting(containerEl)
+      .setDesc("Additional directories to search for the dsh and node binaries. The plugin auto-scans nvm, Homebrew, Volta, asdf, fnm, ~/.local/bin, and ~/bin. Add a custom path below if dsh is installed elsewhere.");
 
     // Render existing custom paths with delete buttons.
     for (const path of this.plugin.settings.customPaths) {
