@@ -13,7 +13,7 @@
 
 ## 前置要求
 
-- [Obsidian](https://obsidian.md/) 1.7.0 或更高版本（仅桌面端）。
+- [Obsidian](https://obsidian.md/) 1.8.0 或更高版本（仅桌面端）。
 - [Node.js](https://nodejs.org/) 22 或更高版本（dsh 需要 `node:zlib.createZstdDecompress`）。
 - 全局安装 [dsh](https://github.com/deepseek-ai/deepseek-harness)：
 

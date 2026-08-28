@@ -13,7 +13,7 @@ Host [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) i
 
 ## Prerequisites
 
-- [Obsidian](https://obsidian.md/) 1.7.0 or later (desktop only).
+- [Obsidian](https://obsidian.md/) 1.8.0 or later (desktop only).
 - [Node.js](https://nodejs.org/) 22 or later (dsh requires `node:zlib.createZstdDecompress`).
 - [dsh](https://github.com/deepseek-ai/deepseek-harness) installed globally:
 

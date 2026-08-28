@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf, FileSystemAdapter } from "obsidian";
 import { DshManager } from "./dsh-manager";
 
 export const DSH_VIEW_TYPE = "dsh-view";
@@ -22,7 +22,7 @@ export class DshView extends ItemView {
   }
 
   getIcon(): string {
-    return "bot";
+    return "dsh-logo";
   }
 
   async onOpen(): Promise<void> {
@@ -43,7 +43,8 @@ export class DshView extends ItemView {
     });
 
     try {
-      const vaultPath = (this.app.vault.adapter as any).getBasePath?.() ?? "";
+      const adapter = this.app.vault.adapter;
+      const vaultPath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
       if (!vaultPath) {
         throw new Error("Could not determine vault path");
       }
@@ -61,7 +62,7 @@ export class DshView extends ItemView {
       this.iframe.addEventListener("load", () => {
         this.statusEl?.hide();
       });
-    } catch (err) {
+    } catch (err: unknown) {
       this.showStatus(`Failed to start DSH: ${(err as Error).message}`);
     }
   }

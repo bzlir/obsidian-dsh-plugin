@@ -32,7 +32,7 @@ export class DshSettingTab extends PluginSettingTab {
         .addExtraButton((btn) =>
           btn.setIcon("trash").setTooltip("Remove").onClick(() => {
             this.plugin.settings.customPaths = this.plugin.settings.customPaths.filter((p: string) => p !== path);
-            this.plugin.saveSettings();
+            void this.plugin.saveSettings();
             this.plugin.applyCustomPaths();
             this.display();
           })
@@ -61,7 +61,7 @@ export class DshSettingTab extends PluginSettingTab {
             return;
           }
           this.plugin.settings.customPaths.push(newPath);
-          this.plugin.saveSettings();
+          void this.plugin.saveSettings();
           this.plugin.applyCustomPaths();
           new Notice(`Added: ${newPath}`);
           newPath = "";
@@ -98,7 +98,7 @@ export class DshSettingTab extends PluginSettingTab {
               }
             }
             if (added > 0) {
-              this.plugin.saveSettings();
+              void this.plugin.saveSettings();
               this.plugin.applyCustomPaths();
               new Notice(`Found ${found.length} dsh binary, added ${added} new path(s)`);
               this.display();

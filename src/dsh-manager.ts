@@ -30,7 +30,6 @@ function candidateBinDirs(customPaths: string[] = []): string[] {
   dirs.push(join(home, ".local", "bin"));
   dirs.push(join(home, "bin"));
   dirs.push(join(home, ".fnm", "aliases", "default", "bin"));
-  // User-provided paths from plugin settings — highest priority, prepended.
   for (const p of customPaths) if (p) dirs.unshift(p);
   return dirs;
 }
@@ -48,21 +47,9 @@ function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
   return { ...process.env, PATH: [...prepend, ...base.split(":")].join(":") };
 }
 
-function runShell(cmd: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const child = spawn("/bin/zsh", ["-l", "-c", cmd], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let out = "";
-    child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
-    child.on("error", () => resolve(null));
-    child.on("exit", () => resolve(out.trim() || null));
-  });
-}
-
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    require("child_process").execFileSync(
+    execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
       { stdio: "pipe", timeout: 5000 }
@@ -89,7 +76,6 @@ function findInDirs(name: string, dirs: string[]): string | null {
 }
 
 async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | null> {
-  const env = augmentedEnv(customPaths);
   const dirs = candidateBinDirs(customPaths);
 
   const dshAbs = findInDirs(DSH_COMMAND, dirs);
@@ -109,30 +95,22 @@ async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | nul
   return { node: nodePath, dshScript };
 }
 
-/**
- * Search the filesystem for `dsh` binaries.
- * Tries macOS Spotlight (mdfind) first — fast, indexed. Falls back to a
- * bounded `find` over common install roots. Returns deduplicated paths
- * whose parent directory could be added to customPaths.
- */
 export function searchForDsh(): Promise<string[]> {
   return new Promise((resolve) => {
     const results = new Set<string>();
-    // Phase 1: macOS Spotlight (instant if available).
     try {
-      const out = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }).toString();
+      const out: string = execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 }).toString();
       for (const line of out.split("\n")) {
         const trimmed = line.trim();
         if (trimmed && trimmed.endsWith("/dsh")) results.add(trimmed);
       }
     } catch {
-      // mdfind unavailable (non-macOS) or timed out — fall through to find.
+      // mdfind unavailable or timed out
     }
     if (results.size > 0) {
       resolve([...results]);
       return;
     }
-    // Phase 2: bounded find over common roots.
     const roots = [homedir(), "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
     const child = spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -147,11 +125,37 @@ export function searchForDsh(): Promise<string[]> {
       }
       resolve([...results]);
     });
-    // Safety timeout.
-    setTimeout(() => {
+    window.setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already dead */ }
     }, 10_000);
   });
+}
+
+function collectDescendants(rootPid: number): number[] {
+  const descendants: number[] = [rootPid];
+  try {
+    const visited = new Set<number>();
+    const stack = [rootPid];
+    while (stack.length) {
+      const parent = stack.pop()!;
+      if (visited.has(parent)) continue;
+      visited.add(parent);
+      const result: string = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] }).toString();
+      for (const line of result.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          const childPid = Number(trimmed);
+          if (Number.isFinite(childPid) && !visited.has(childPid)) {
+            descendants.push(childPid);
+            stack.push(childPid);
+          }
+        }
+      }
+    }
+  } catch {
+    // pgrep unavailable or process already gone
+  }
+  return descendants;
 }
 
 export class DshManager {
@@ -170,7 +174,6 @@ export class DshManager {
 
   setCustomPaths(paths: string[]): void {
     this.customPaths = paths.filter((p) => p && p.trim().length > 0);
-    // Invalidate cached resolution so next isAvailable/start re-resolves.
     this.resolved = null;
   }
 
@@ -188,8 +191,6 @@ export class DshManager {
     if (this.process) {
       throw new Error("DSH process is already running");
     }
-    // Reap any orphaned dsh web processes from a previous crashed session.
-    // They would otherwise pile up on every plugin reload / Obsidian restart.
     this.reapOrphanedDsh();
     if (!this.resolved) {
       const bin = await resolveBin(this.customPaths);
@@ -206,13 +207,9 @@ export class DshManager {
       { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
     );
 
-    // Install process-exit guard the first time we spawn, so a hard kill of
-    // Obsidian (SIGKILL/crash/Cmd+Q without unload) still tears down dsh.
-    // Exit hooks must be minimal and fully synchronous — no child-process
-    // spawning, no setTimeout, no async. The event loop is tearing down.
     if (!this.exitHookInstalled) {
       this.exitHookInstalled = true;
-      const killSync = () => {
+      const killSync = (): void => {
         const pid = this.trackedPid;
         if (pid == null) return;
         try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
@@ -234,7 +231,7 @@ export class DshManager {
       }
     });
 
-    this.process.on("exit", (code, signal) => {
+    this.process.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       const wasRunning = this.process !== null;
       this.process = null;
       if (wasRunning && this.onUnexpectedExit) {
@@ -246,7 +243,7 @@ export class DshManager {
       }
     });
 
-    this.process.on("error", (err) => {
+    this.process.on("error", (err: Error) => {
       this.process = null;
       if (this.onUnexpectedExit) {
         this.onUnexpectedExit({ code: null, signal: null, stderr: err.message });
@@ -296,7 +293,7 @@ export class DshManager {
         req.end();
       });
       if (!ok) console.warn("[DSH] workspace.create call may have failed");
-    } catch (err) {
+    } catch (err: unknown) {
       console.warn("[DSH] failed to add vault as workspace:", (err as Error).message);
     }
   }
@@ -313,81 +310,21 @@ export class DshManager {
     const proc = this.process;
     if (!proc || proc.pid == null) return;
     const rootPid = proc.pid;
-    // Collect all descendant PIDs via pgrep -P recursion, then kill the tree.
-    const descendants: number[] = [rootPid];
-    try {
-      const visited = new Set<number>();
-      const stack = [rootPid];
-      while (stack.length) {
-        const parent = stack.pop()!;
-        if (visited.has(parent)) continue;
-        visited.add(parent);
-        const result = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
-        for (const line of result.toString().split("\n")) {
-          const trimmed = line.trim();
-          if (trimmed) {
-            const childPid = Number(trimmed);
-            if (Number.isFinite(childPid) && !visited.has(childPid)) {
-              descendants.push(childPid);
-              stack.push(childPid);
-            }
-          }
-        }
-      }
-    } catch {
-      // pgrep unavailable or process already gone — fall back to root only.
-    }
-    // SIGTERM children first, root last; then SIGKILL stragglers.
+    const descendants = collectDescendants(rootPid);
     for (const pid of [...descendants].reverse()) {
       try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
     }
-    setTimeout(() => {
+    window.setTimeout(() => {
       for (const pid of [...descendants].reverse()) {
         try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
       }
     }, SHUTDOWN_GRACE_MS);
   }
 
-  private killTreeSync(): void {
-    // Synchronous variant for process exit hooks — setTimeout never fires
-    // inside 'exit', so we go straight to SIGKILL for the whole tree.
-    const proc = this.process;
-    if (!proc || proc.pid == null) return;
-    const rootPid = proc.pid;
-    const descendants: number[] = [rootPid];
-    try {
-      const visited = new Set<number>();
-      const stack = [rootPid];
-      while (stack.length) {
-        const parent = stack.pop()!;
-        if (visited.has(parent)) continue;
-        visited.add(parent);
-        const result = execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
-        for (const line of result.toString().split("\n")) {
-          const trimmed = line.trim();
-          if (trimmed) {
-            const childPid = Number(trimmed);
-            if (Number.isFinite(childPid) && !visited.has(childPid)) {
-              descendants.push(childPid);
-              stack.push(childPid);
-            }
-          }
-        }
-      }
-    } catch {
-      // pgrep unavailable or process already gone.
-    }
-    for (const pid of [...descendants].reverse()) {
-      try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
-    }
-  }
-
   reapOrphanedDsh(): void {
-    // Kill any lingering `dsh web` processes from a previous crashed session.
-    // Identified by matching the dsh bin path + "web" in the command line.
     try {
-      const out = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] });
-      for (const line of out.toString().split("\n")) {
+      const out: string = execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] }).toString();
+      for (const line of out.split("\n")) {
         const trimmed = line.trim();
         if (trimmed) {
           const pid = Number(trimmed);
@@ -397,7 +334,7 @@ export class DshManager {
         }
       }
     } catch {
-      // pgrep returns non-zero when no matches — no orphans, nothing to do.
+      // no orphans
     }
   }
 
@@ -428,7 +365,6 @@ export class DshManager {
 
   private async waitForReady(port: number): Promise<void> {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-    // Phase 1: wait for TCP port to accept connections (webserver bound).
     while (Date.now() < deadline) {
       if (this.process === null) {
         throw new Error(
@@ -436,12 +372,8 @@ export class DshManager {
         );
       }
       if (await this.checkPort(port)) break;
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      await new Promise((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
-    // Phase 2: wait for the API gateway to actually serve requests.
-    // The port opens early (webserver binds), but apiProxy and its 11
-    // dependencies take longer to activate. Loading the iframe before
-    // the API is ready causes client-side "N entries did not activate".
     while (Date.now() < deadline) {
       if (this.process === null) {
         throw new Error(
@@ -449,7 +381,7 @@ export class DshManager {
         );
       }
       if (await this.checkApiReady(port)) return;
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      await new Promise((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
     throw new Error(`DSH API did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s`);
   }
@@ -492,7 +424,6 @@ export class DshManager {
           let data = "";
           res.on("data", (chunk: Buffer) => (data += chunk.toString()));
           res.on("end", () => {
-            // 200 with valid JSON-RPC envelope means apiProxy is live.
             resolve(res.statusCode === 200 && data.includes("server-response"));
           });
         },
