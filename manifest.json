@@ -2,7 +2,7 @@
   "id": "dsh-embedded",
   "name": "DSH Embedded",
   "version": "0.1.0",
-  "minAppVersion": "1.8.0",
+  "minAppVersion": "1.13.0",
   "description": "Host DeepSeek Harness (dsh) as an embedded agent surface — vault-aware, persistent memory.",
   "author": "bzlir",
   "authorUrl": "https://github.com/bzlir",
