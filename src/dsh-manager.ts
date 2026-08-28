@@ -14,7 +14,8 @@ const _dirname = dirname as unknown as (path: string) => string;
 const _readdirSync = readdirSync as unknown as (path: string) => string[];
 const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _realpathSync = realpathSync as unknown as (path: string) => string;
-const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => Buffer;
+const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => Uint8Array;
+const _byteLength = Buffer.byteLength as unknown as (str: string) => number;
 
 // Minimal typed interfaces for process and spawned-process objects.
 interface TypedProcess {
@@ -24,7 +25,7 @@ interface TypedProcess {
 }
 
 interface TypedStream {
-  on: (event: string, listener: (data: string | Buffer) => void) => void;
+  on: (event: string, listener: (data: Uint8Array | string) => void) => void;
 }
 
 interface TypedChildProcess {
@@ -124,7 +125,7 @@ function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
 
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    const result: Buffer = _execFileSync(
+    const result: Uint8Array = _execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
       { stdio: "pipe", timeout: 5000 }
@@ -180,7 +181,7 @@ export function searchForDsh(): Promise<string[]> {
   return new Promise<string[]>((resolve) => {
     const results: Set<string> = new Set();
     try {
-      const raw: Buffer = _execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+      const raw: Uint8Array = _execFileSync("mdfind", ["-name", "dsh"], { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
       const out: string = raw.toString();
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
@@ -203,7 +204,7 @@ export function searchForDsh(): Promise<string[]> {
     let out: string = "";
     const stdout: TypedStream | null = child.stdout;
     if (stdout) {
-      stdout.on("data", (d: string | Buffer) => {
+      stdout.on("data", (d: Uint8Array | string) => {
         const text: string = typeof d === "string" ? d : d.toString();
         out += text;
       });
@@ -237,7 +238,7 @@ function collectDescendants(rootPid: number): number[] {
       const parent: number = stack.pop() as number;
       if (visited.has(parent)) continue;
       visited.add(parent);
-      const raw: Buffer = _execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
+      const raw: Uint8Array = _execFileSync("pgrep", ["-P", String(parent)], { stdio: ["pipe", "pipe", "pipe"] });
       const result: string = raw.toString();
       for (const line of result.split("\n")) {
         const trimmed: string = line.trim();
@@ -328,7 +329,7 @@ export class DshManager {
 
     const stderr: TypedStream | null = this.process.stderr;
     if (stderr) {
-      stderr.on("data", (data: string | Buffer) => {
+      stderr.on("data", (data: Uint8Array | string) => {
         const text: string = typeof data === "string" ? data : data.toString();
         const lines: string[] = text.split("\n").filter((l: string) => l.trim());
         this.stderrLines.push(...lines);
@@ -382,13 +383,13 @@ export class DshManager {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(body),
+              "Content-Length": _byteLength(body),
             },
             timeout: 10_000,
           },
           (res: TypedIncomingMessage) => {
             let data: string = "";
-            res.on("data", (chunk: Buffer) => {
+            res.on("data", (chunk: Uint8Array) => {
               data += chunk.toString();
             });
             res.on("end", () => {
@@ -447,7 +448,7 @@ export class DshManager {
 
   reapOrphanedDsh(): void {
     try {
-      const raw: Buffer = _execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] });
+      const raw: Uint8Array = _execFileSync("pgrep", ["-f", "dsh/lib/bin.js web"], { stdio: ["pipe", "pipe", "pipe"] });
       const out: string = raw.toString();
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
@@ -548,13 +549,13 @@ export class DshManager {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(body),
+            "Content-Length": _byteLength(body),
           },
           timeout: 3000,
         },
         (res: TypedIncomingMessage) => {
           let data: string = "";
-          res.on("data", (chunk: Buffer) => {
+          res.on("data", (chunk: Uint8Array) => {
             data += chunk.toString();
           });
           res.on("end", () => {
