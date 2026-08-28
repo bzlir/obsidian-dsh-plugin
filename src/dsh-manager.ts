@@ -111,7 +111,7 @@ function candidateBinDirs(customPaths: string[] = []): string[] {
   return dirs;
 }
 
-function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
+function augmentedEnv(customPaths: string[] = []): Record<string, string | undefined> {
   const base: string = _process.env.PATH ?? "/usr/bin:/bin";
   const baseParts: string[] = base.split(":");
   const prepend: string[] = [];
@@ -123,7 +123,8 @@ function augmentedEnv(customPaths: string[] = []): NodeJS.ProcessEnv {
     }
   }
   const pathValue: string = [...prepend, ...baseParts].join(":");
-  return { ..._process.env, PATH: pathValue };
+  const env: Record<string, string | undefined> = { ..._process.env, PATH: pathValue };
+  return env;
 }
 
 function checkNodeHasZstd(nodePath: string): boolean {
