@@ -1,4 +1,4 @@
-# DSH in Obsidian
+# DSH Embedded
 
 将 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) 嵌入 Obsidian —— 让 dsh agent 读写 Vault 文件，并在 Vault 内维护 agent 工作记忆。
 
@@ -42,7 +42,7 @@ npm run build
 
 1. 打开 **设置 → 社区插件**。
 2. 开启 **社区插件**（如果当前是安全模式）。
-3. 在 *已安装插件* 中找到 **DSH in Obsidian**，打开开关。
+3. 在 *已安装插件* 中找到 **DSH Embedded**，打开开关。
 
 ## 使用
 
@@ -59,7 +59,7 @@ npm run build
 
 ## 配置
 
-插件提供设置面板（**设置 → DSH in Obsidian**），可添加自定义 `dsh` 搜索路径，或点击 **Search for dsh** 自动扫描机器上的 dsh 二进制位置。
+插件提供设置面板（**设置 → DSH Embedded**），可添加自定义 `dsh` 搜索路径，或点击 **Search for dsh** 自动扫描机器上的 dsh 二进制位置。
 
 dsh 配置位于 `~/.dsh/`，请参考 [dsh 文档](https://github.com/deepseek-ai/deepseek-harness) 了解 profile 和凭据设置。
 

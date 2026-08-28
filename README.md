@@ -1,4 +1,4 @@
-# DSH in Obsidian
+# DSH Embedded
 
 English | [简体中文](./README.zh-CN.md)
 
@@ -42,7 +42,7 @@ Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsid
 
 1. Open **Settings → Community plugins**.
 2. Turn on **Community plugins** (if Safe Mode is on).
-3. Find **DSH in Obsidian** under *Installed plugins* and toggle it on.
+3. Find **DSH Embedded** under *Installed plugins* and toggle it on.
 
 ## Usage
 
@@ -59,7 +59,7 @@ Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsid
 
 ## Configuration
 
-The plugin has a settings panel (**Settings → DSH in Obsidian**) where you can add custom search paths for the `dsh` binary, or click **Search for dsh** to automatically scan your machine.
+The plugin has a settings panel (**Settings → DSH Embedded**) where you can add custom search paths for the `dsh` binary, or click **Search for dsh** to automatically scan your machine.
 
 dsh configuration lives in `~/.dsh/` — see the [dsh documentation](https://github.com/deepseek-ai/deepseek-harness) for profile and credential setup.
 
