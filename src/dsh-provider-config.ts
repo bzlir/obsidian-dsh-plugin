@@ -1,14 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { execFileSync } from "child_process";
 
 const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _readFileSync = readFileSync as unknown as (path: string, encoding: string) => string;
 const _writeFileSync = writeFileSync as unknown as (path: string, data: string) => void;
 const _join = join as unknown as (...paths: string[]) => string;
 const _homedir = homedir as unknown as () => string;
-const _execFileSync = execFileSync as unknown as (cmd: string, args: string[]) => string;
 
 const DSH_HOME = _join(_homedir(), ".dsh");
 const CREDENTIALS_PATH = _join(DSH_HOME, ".credentials.yaml");
@@ -235,15 +233,6 @@ interface DetectedAgent {
 }
 
 function detectAgent(agentName: string): DetectedAgent | null {
-  let onPath = false;
-  try {
-    _execFileSync("which", [agentName]);
-    onPath = true;
-  } catch {
-    onPath = false;
-  }
-  if (!onPath) return null;
-
   const home: string = _homedir();
   if (agentName === "opencode") {
     const configPath: string = _join(home, ".config", "opencode", "opencode.json");
