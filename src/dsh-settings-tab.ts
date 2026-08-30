@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionRender, SettingDefinitionGroup, ButtonComponent, ExtraButtonComponent, TextComponent } from "obsidian";
+import { App, Notice, Modal, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionRender, SettingDefinitionGroup, ButtonComponent, ExtraButtonComponent, TextComponent } from "obsidian";
 import type DshPlugin from "./main";
 import { searchForDsh } from "./dsh-manager";
 import { dirname } from "path";
@@ -333,52 +333,40 @@ export class DshSettingTab extends PluginSettingTab {
     const current: string = existing ?? "";
     const masked: string = current ? maskApiKey(current) : "";
 
-    const input: HTMLInputElement = document.createElement("input");
-    input.type = "password";
-    input.value = current;
-    input.placeholder = `Enter API key for ${provider.name} (currently: ${masked || "not set"})`;
-    input.style.width = "300px";
+    const modal: Modal = new Modal(this.app);
+    modal.titleEl.setText(`Set API key: ${provider.displayName || provider.name}`);
 
-    const container: HTMLDivElement = document.createElement("div");
-    container.style.padding = "1rem";
-    container.appendChild(input);
+    let inputValue = "";
+    const content: Setting = new Setting(modal.contentEl)
+      .setName("API Key")
+      .setDesc(`Currently: ${masked || "not set"}. Stored in ~/.dsh/.credentials.yaml as ${provider.apiKeyEnv}.`)
+      .addText((text: TextComponent) => {
+        text.inputEl.type = "password";
+        text.setPlaceholder("Enter new API key").onChange((val: string) => {
+          inputValue = val.trim();
+        });
+      });
 
-    const btnRow: HTMLDivElement = document.createElement("div");
-    btnRow.style.marginTop = "0.5rem";
-    btnRow.style.display = "flex";
-    btnRow.style.gap = "0.5rem";
+    new Setting(modal.contentEl)
+      .addButton((btn: ButtonComponent) =>
+        btn.setButtonText("Save").setCta().onClick(() => {
+          if (!inputValue) {
+            new Notice("Enter a key or Cancel");
+            return;
+          }
+          setCredential(provider.apiKeyEnv, inputValue);
+          new Notice(`API key set for ${provider.name}`);
+          modal.close();
+          this.update();
+        })
+      )
+      .addButton((btn: ButtonComponent) =>
+        btn.setButtonText("Cancel").onClick(() => {
+          modal.close();
+        })
+      );
 
-    const saveBtn: HTMLButtonElement = document.createElement("button");
-    saveBtn.textContent = "Save";
-    saveBtn.className = "mod-cta";
-
-    const cancelBtn: HTMLButtonElement = document.createElement("button");
-    cancelBtn.textContent = "Cancel";
-
-    btnRow.appendChild(saveBtn);
-    btnRow.appendChild(cancelBtn);
-    container.appendChild(btnRow);
-
-    const modal: HTMLElement = document.createElement("div");
-    modal.className = "modal-container";
-    modal.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;";
-    modal.appendChild(container);
-
-    const overlay: HTMLElement = document.body.appendChild(modal);
-
-    const close = (): void => { overlay.remove(); };
-    cancelBtn.addEventListener("click", close);
-    saveBtn.addEventListener("click", () => {
-      const val: string = input.value.trim();
-      if (!val) {
-        new Notice("Enter a key or Cancel");
-        return;
-      }
-      setCredential(provider.apiKeyEnv, val);
-      new Notice(`API key set for ${provider.name}`);
-      close();
-      this.update();
-    });
+    modal.open();
   }
 
   private async runImport(agentName: string, btn: ButtonComponent): Promise<void> {
