@@ -233,7 +233,7 @@ export class DshSettingTab extends PluginSettingTab {
       desc: "Stored in ~/.dsh/.credentials.yaml",
       render: (setting: Setting) => {
         setting.addText((text: TextComponent) => {
-          text.inputEl.type = "password";
+          text.inputEl.setAttribute("type", "password");
           text.setPlaceholder("sk-...").onChange((val: string) => {
             newApiKey = val.trim();
           });
@@ -341,7 +341,7 @@ export class DshSettingTab extends PluginSettingTab {
       .setName("API Key")
       .setDesc(`Currently: ${masked || "not set"}. Stored in ~/.dsh/.credentials.yaml as ${provider.apiKeyEnv}.`)
       .addText((text: TextComponent) => {
-        text.inputEl.type = "password";
+        text.inputEl.setAttribute("type", "password");
         text.setPlaceholder("Enter new API key").onChange((val: string) => {
           inputValue = val.trim();
         });
