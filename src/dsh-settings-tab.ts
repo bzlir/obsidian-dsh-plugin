@@ -186,36 +186,70 @@ export class DshSettingTab extends PluginSettingTab {
 
     let newName = "";
     let newBaseURL = "";
-    let newApiKey = "";
     let newModelId = "";
-    const addProviderRow: SettingDefinitionRender = {
-      name: "Add custom provider",
-      desc: "Fill all fields then click Add. The provider is written to dsh config immediately.",
+    let newApiKey = "";
+
+    const nameRow: SettingDefinitionRender = {
+      name: "Provider name",
+      desc: "Unique identifier (e.g. openai, deepseek, nio)",
       render: (setting: Setting) => {
         setting.addText((text: TextComponent) => {
-          text.setPlaceholder("Provider name (e.g. openai)").onChange((val: string) => {
+          text.setPlaceholder("openai").onChange((val: string) => {
             newName = val.trim();
           });
         });
+      },
+    };
+    items.push(nameRow);
+
+    const baseURLRow: SettingDefinitionRender = {
+      name: "Base URL",
+      desc: "OpenAI-compatible endpoint URL",
+      render: (setting: Setting) => {
         setting.addText((text: TextComponent) => {
-          text.setPlaceholder("Base URL (e.g. https://api.openai.com/v1)").onChange((val: string) => {
+          text.setPlaceholder("https://api.openai.com/v1").onChange((val: string) => {
             newBaseURL = val.trim();
           });
         });
+      },
+    };
+    items.push(baseURLRow);
+
+    const modelIdRow: SettingDefinitionRender = {
+      name: "Model ID",
+      desc: "Default model identifier for this provider",
+      render: (setting: Setting) => {
         setting.addText((text: TextComponent) => {
-          text.setPlaceholder("Model ID (e.g. gpt-4o)").onChange((val: string) => {
+          text.setPlaceholder("gpt-4o").onChange((val: string) => {
             newModelId = val.trim();
           });
         });
+      },
+    };
+    items.push(modelIdRow);
+
+    const apiKeyRow: SettingDefinitionRender = {
+      name: "API Key",
+      desc: "Stored in ~/.dsh/.credentials.yaml",
+      render: (setting: Setting) => {
         setting.addText((text: TextComponent) => {
-          text.setPlaceholder("API Key").onChange((val: string) => {
+          text.inputEl.type = "password";
+          text.setPlaceholder("sk-...").onChange((val: string) => {
             newApiKey = val.trim();
           });
         });
+      },
+    };
+    items.push(apiKeyRow);
+
+    const addBtnRow: SettingDefinitionRender = {
+      name: "",
+      desc: "",
+      render: (setting: Setting) => {
         setting.addButton((btn: ButtonComponent) =>
-          btn.setButtonText("Add").setCta().onClick(() => {
+          btn.setButtonText("Add provider").setCta().onClick(() => {
             if (!newName || !newBaseURL || !newApiKey || !newModelId) {
-              new Notice("Fill all fields: name, baseURL, model ID, API key");
+              new Notice("Fill all fields: name, Base URL, Model ID, API Key");
               return;
             }
             const apiKeyEnv: string = generateApiKeyEnv(newName);
@@ -240,7 +274,7 @@ export class DshSettingTab extends PluginSettingTab {
         );
       },
     };
-    items.push(addProviderRow);
+    items.push(addBtnRow);
   }
 
   private buildAgentImportSection(items: SettingDefinitionItem[]): void {
