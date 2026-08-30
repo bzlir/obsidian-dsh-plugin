@@ -1,13 +1,11 @@
 import { spawn, execFileSync } from "child_process";
-import { existsSync, appendFileSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
 const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => string;
 const _existsSync = existsSync as unknown as (path: string) => boolean;
-const _appendFileSync = appendFileSync as unknown as (path: string, data: string) => void;
-const _readFileSync = readFileSync as unknown as (path: string, encoding: string) => string;
 const _join = join as unknown as (...paths: string[]) => string;
 const _homedir = homedir as unknown as () => string;
 
@@ -21,6 +19,13 @@ interface TypedChildProcess {
 
 interface TypedStream {
   on: (event: string, listener: (data: Uint8Array | string) => void) => void;
+}
+
+const _process = process as unknown as TypedProcess;
+
+interface TypedProcess {
+  env: Record<string, string | undefined>;
+  platform: string;
 }
 
 const NVM_INSTALL_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh";
@@ -74,7 +79,7 @@ export function findSystemNode(): { node: string; npm: string } | null {
 
 export function checkNodeVersion(nodePath: string): boolean {
   try {
-    const result: string = _execFileSync(nodePath, ["-e", "process.exit(process.versions.node >= 22 ? 0 : 1)"], { stdio: ["pipe", "pipe", "pipe"] });
+    _execFileSync(nodePath, ["-e", "process.exit(process.versions.node >= 22 ? 0 : 1)"], { stdio: ["pipe", "pipe", "pipe"] });
     return true;
   } catch {
     return false;
@@ -107,7 +112,7 @@ export function checkDshInstalled(): boolean {
 
 function runCommand(command: string, args: string[], env?: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const child: TypedChildProcess = _spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: env ?? process.env });
+    const child: TypedChildProcess = _spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
     let stdout = "";
     let stderr = "";
     if (child.stdout) {
@@ -131,10 +136,10 @@ function runCommand(command: string, args: string[], env?: Record<string, string
 }
 
 function getNvmEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env };
+  const env: Record<string, string | undefined> = { ..._process.env };
   const nvmDir: string = NVM_DIR;
-  const pathSeparator: string = process.platform === "win32" ? ";" : ":";
-  let nodeFound: { node: string; npm: string } | null = findNodeFromNvm();
+  const pathSeparator: string = _process.platform === "win32" ? ";" : ":";
+  const nodeFound: { node: string; npm: string } | null = findNodeFromNvm();
   if (nodeFound) {
     const binDir: string = nodeFound.node.substring(0, nodeFound.node.length - 5);
     env.PATH = binDir + pathSeparator + (env.PATH ?? "");
@@ -178,10 +183,10 @@ export async function installNode22(progress: ProgressCallback): Promise<{ node:
 export async function installDsh(npmPath: string, progress: ProgressCallback): Promise<boolean> {
   progress({ step: "installing-dsh", message: "Installing dsh via npm..." });
   const nodeFound: { node: string; npm: string } | null = findNodeFromNvm() ?? findSystemNode();
-  const env: Record<string, string | undefined> = { ...process.env };
+  const env: Record<string, string | undefined> = { ..._process.env };
   if (nodeFound) {
     const binDir: string = nodeFound.node.substring(0, nodeFound.node.length - 5);
-    const pathSeparator: string = process.platform === "win32" ? ";" : ":";
+    const pathSeparator: string = _process.platform === "win32" ? ";" : ":";
     env.PATH = binDir + pathSeparator + (env.PATH ?? "");
   }
   const result = await runCommand(npmPath, ["install", "-g", DSH_PACKAGE], env);

@@ -1,5 +1,5 @@
 import { App, Modal, Setting, ButtonComponent, Notice } from "obsidian";
-import { runFullInstall, checkDshInstalled, type InstallProgress, type ProgressCallback } from "./dsh-installer";
+import { runFullInstall, type InstallProgress, type ProgressCallback } from "./dsh-installer";
 
 type InstallState = "idle" | "installing" | "done" | "error";
 
