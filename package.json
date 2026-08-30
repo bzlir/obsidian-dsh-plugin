@@ -1,6 +1,6 @@
 {
   "name": "obsidian-dsh-plugin",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Host DeepSeek Harness (dsh) inside Obsidian",
   "main": "main.js",
   "type": "module",

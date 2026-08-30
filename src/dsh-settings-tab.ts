@@ -337,7 +337,7 @@ export class DshSettingTab extends PluginSettingTab {
     modal.titleEl.setText(`Set API key: ${provider.displayName || provider.name}`);
 
     let inputValue = "";
-    const content: Setting = new Setting(modal.contentEl)
+    new Setting(modal.contentEl)
       .setName("API Key")
       .setDesc(`Currently: ${masked || "not set"}. Stored in ~/.dsh/.credentials.yaml as ${provider.apiKeyEnv}.`)
       .addText((text: TextComponent) => {
