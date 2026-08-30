@@ -126,7 +126,7 @@ function runCommand(command: string, args: string[], env?: Record<string, string
       });
     }
     child.on("exit", (...args: never[]) => {
-      const code: number | null = args[0] as number | null;
+      const code: number | null = args[0];
       resolve({ stdout, stderr, code });
     });
     child.on("error", () => {
