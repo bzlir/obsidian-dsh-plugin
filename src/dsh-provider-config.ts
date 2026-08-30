@@ -59,7 +59,7 @@ export function readCredentials(): Record<string, string> {
     const trimmed: string = line.trim();
     if (trimmed === "refs:") { inRefs = true; continue; }
     if (trimmed === "" || trimmed.startsWith("#")) continue;
-    if (inRefs && line.startsWith("  ") && !line.startsWith("    ")) {
+    if (inRefs && line.startsWith("{2}") && !line.startsWith("{4}")) {
       const colonIdx: number = trimmed.indexOf(":");
       if (colonIdx > 0) {
         const key: string = trimmed.substring(0, colonIdx).trim();
@@ -102,7 +102,7 @@ function parseYamlProviders(content: string): ProviderConfig[] {
       if (i < lines.length && lines[i].includes("providers:")) i++;
       while (i < lines.length) {
         const providerLine: string = lines[i];
-        if (providerLine.startsWith("        ") && !providerLine.startsWith("          ") && providerLine.trim() && !providerLine.trim().startsWith("#") && providerLine.trim().endsWith(":") && !providerLine.includes("models:")) {
+        if (providerLine.startsWith("{8}") && !providerLine.startsWith("{10}") && providerLine.trim() && !providerLine.trim().startsWith("#") && providerLine.trim().endsWith(":") && !providerLine.includes("models:")) {
           const providerName: string = providerLine.trim().replace(":", "");
           const provider: ProviderConfig = {
             name: providerName,
@@ -115,8 +115,8 @@ function parseYamlProviders(content: string): ProviderConfig[] {
           i++;
           while (i < lines.length) {
             const fieldLine: string = lines[i];
-            if (fieldLine.startsWith("        ") && !fieldLine.startsWith("          ") && fieldLine.trim() && !fieldLine.trim().startsWith("#")) {
-              const fieldMatch: RegExpMatchArray | null = /^          (\w+):\s*(.*)$/.exec(fieldLine);
+            if (fieldLine.startsWith("{8}") && !fieldLine.startsWith("{10}") && fieldLine.trim() && !fieldLine.trim().startsWith("#")) {
+              const fieldMatch: RegExpMatchArray | null = /^ {10}(\w+):\s*(.*)$/.exec(fieldLine);
               if (fieldMatch) {
                 const fieldName: string = fieldMatch[1];
                 const fieldValue: string = fieldMatch[2];
@@ -135,8 +135,8 @@ function parseYamlProviders(content: string): ProviderConfig[] {
                     const modelId: string = modelLine.trim().replace("- id:", "").trim();
                     model.id = modelId;
                     i++;
-                    while (i < lines.length && lines[i].trim() && !lines[i].trim().startsWith("- id:") && !lines[i].startsWith("        ") && lines[i].startsWith("            ")) {
-                      const modelFieldMatch: RegExpMatchArray | null = /^            (\w+):\s*(.*)$/.exec(lines[i]);
+                    while (i < lines.length && lines[i].trim() && !lines[i].trim().startsWith("- id:") && !lines[i].startsWith("{8}") && lines[i].startsWith("{12}")) {
+                      const modelFieldMatch: RegExpMatchArray | null = /^ {12}(\w+):\s*(.*)$/.exec(lines[i]);
                       if (modelFieldMatch) {
                         const mField: string = modelFieldMatch[1];
                         const mVal: string = modelFieldMatch[2];
