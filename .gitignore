@@ -8,3 +8,5 @@ scripts/
 backups/
 scripts/backups/
 .playwright-cli/
+AGENTS.md
+working.md
