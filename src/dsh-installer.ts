@@ -205,7 +205,51 @@ function isNvmAvailableWindows(): boolean {
     _execFileSync("cmd", ["/c", "nvm", "version"], { stdio: ["pipe", "pipe", "pipe"] });
     return true;
   } catch {
-    // nvm not runnable
+    // nvm not runnable via cmd
+  }
+  // Method 3: use PowerShell to read fresh system env + run nvm
+  // PowerShell loads the full system environment, even if Obsidian's process env is stale
+  try {
+    const psResult: string = _execFileSync("powershell", ["-Command", "[Environment]::GetEnvironmentVariable('NVM_HOME', 'User')"], { stdio: ["pipe", "pipe", "pipe"] });
+    const psNvmHome: string = psResult.trim();
+    if (psNvmHome) {
+      const exe: string = _join(psNvmHome, "nvm.exe");
+      if (_existsSync(exe)) {
+        // Found nvm.exe — update process env so subsequent calls find it
+        _process.env.NVM_HOME = psNvmHome;
+        return true;
+      }
+    }
+  } catch {
+    // PowerShell not available
+  }
+  // Method 4: scan common nvm-windows install locations
+  const appData: string | undefined = _process.env.APPDATA;
+  if (appData) {
+    const commonPaths: string[] = [
+      _join(appData, "nvm"),
+      _join(appData, "nvm", "nvm.exe"),
+      "C:\\nvm",
+      "C:\\nvm\\nvm.exe",
+    ];
+    for (const p of commonPaths) {
+      if (_existsSync(p)) {
+        // Determine if it's the dir or the exe
+        const nvmDir: string = p.endsWith("nvm.exe") ? p.substring(0, p.length - 8) : p;
+        const exe: string = p.endsWith("nvm.exe") ? p : _join(p, "nvm.exe");
+        if (_existsSync(exe)) {
+          if (!_process.env.NVM_HOME) _process.env.NVM_HOME = nvmDir;
+          return true;
+        }
+      }
+    }
+  }
+  // Method 5: try powershell 'nvm version' (fresh system PATH)
+  try {
+    _execFileSync("powershell", ["-Command", "nvm version"], { stdio: ["pipe", "pipe", "pipe"] });
+    return true;
+  } catch {
+    // nvm not runnable even via PowerShell
   }
   return false;
 }
