@@ -206,8 +206,66 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
     progress({ step: "error", message: `nvm-windows installation failed. Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
     return false;
   }
+  // winget installs nvm but doesn't update the current process PATH.
+  // Refresh NVM_HOME / NVM_SYMLINK from registry so subsequent calls find nvm.exe.
+  refreshWindowsEnv();
+  // Verify nvm.exe is now findable
+  const nvmHome: string | undefined = _process.env.NVM_HOME;
+  if (!nvmHome || !_existsSync(_join(nvmHome, "nvm.exe"))) {
+    // Fallback: scan common install locations
+    const appData: string | undefined = _process.env.APPDATA;
+    if (appData) {
+      const fallbackNvm: string = _join(appData, "nvm");
+      if (_existsSync(_join(fallbackNvm, "nvm.exe"))) {
+        if (!_process.env.NVM_HOME) _process.env.NVM_HOME = fallbackNvm;
+      }
+    }
+  }
   progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
   return true;
+}
+
+function refreshWindowsEnv(): void {
+  // Read NVM_HOME and NVM_SYMLINK from registry (set by nvm-windows installer)
+  try {
+    const regResult: string = _execFileSync("reg", ["query", "HKCU\\Environment"], { stdio: ["pipe", "pipe", "pipe"] });
+    const lines: string[] = regResult.split("\n");
+    for (const line of lines) {
+      const trimmed: string = line.trim();
+      if (trimmed.startsWith("NVM_HOME")) {
+        const match: RegExpMatchArray | null = /NVM_HOME\s+REG_SZ\s+(.+)/.exec(trimmed);
+        if (match) _process.env.NVM_HOME = match[1].trim();
+      }
+      if (trimmed.startsWith("NVM_SYMLINK")) {
+        const match: RegExpMatchArray | null = /NVM_SYMLINK\s+REG_SZ\s+(.+)/.exec(trimmed);
+        if (match) _process.env.NVM_SYMLINK = match[1].trim();
+      }
+    }
+  } catch {
+    // registry query failed — nvm may not have set env vars yet
+  }
+}
+
+function findNvmExe(): string | null {
+  // Check NVM_HOME first
+  const nvmHome: string | undefined = _process.env.NVM_HOME;
+  if (nvmHome) {
+    const exe: string = _join(nvmHome, "nvm.exe");
+    if (_existsSync(exe)) return exe;
+  }
+  // Check APPDATA fallback
+  const appData: string | undefined = _process.env.APPDATA;
+  if (appData) {
+    const exe: string = _join(appData, "nvm", "nvm.exe");
+    if (_existsSync(exe)) return exe;
+  }
+  // Check NVM_SYMLINK
+  const nvmSymlink: string | undefined = _process.env.NVM_SYMLINK;
+  if (nvmSymlink) {
+    const exe: string = _join(nvmSymlink, "nvm.exe");
+    if (_existsSync(exe)) return exe;
+  }
+  return null;
 }
 
 export async function installNode22(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
@@ -240,16 +298,23 @@ async function installNode22Unix(progress: ProgressCallback): Promise<{ node: st
 
 async function installNode22Windows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
   progress({ step: "installing-node", message: "Installing Node.js 22 via nvm-windows..." });
-  const result = await runCommand("cmd", ["/c", "nvm", "install", "22"]);
+  const nvmExe: string | null = findNvmExe();
+  if (!nvmExe) {
+    progress({ step: "error", message: "nvm.exe not found after installation. Try restarting Obsidian and retry." });
+    return null;
+  }
+  const result = await runCommand(nvmExe, ["install", "22"]);
   if (result.code !== 0) {
     progress({ step: "error", message: `Node.js installation failed: ${result.stderr}` });
     return null;
   }
-  const useResult = await runCommand("cmd", ["/c", "nvm", "use", "22"]);
+  const useResult = await runCommand(nvmExe, ["use", "22"]);
   if (useResult.code !== 0) {
     progress({ step: "error", message: `Node.js installed but nvm use failed: ${useResult.stderr}` });
     return null;
   }
+  // Refresh env again — nvm use sets the symlink
+  refreshWindowsEnv();
   const nodeFound: { node: string; npm: string } | null = findNodeFromNvmWindows() ?? findSystemNode();
   if (!nodeFound) {
     progress({ step: "error", message: "Node.js installed but binary not found. Try restarting Obsidian." });
@@ -312,8 +377,12 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
       const nvmHome: string | undefined = _process.env.NVM_HOME;
       const nvmReady: boolean = isWindows ? (nvmHome !== undefined && _existsSync(nvmHome)) : _existsSync(NVM_SH);
       if (!nvmReady) {
-        const nvmOk: boolean = await installNvm(progress);
-        if (!nvmOk) return false;
+        // On Windows, also check if nvm.exe is findable even without NVM_HOME
+        const winReady: boolean = isWindows ? findNvmExe() !== null : false;
+        if (!winReady) {
+          const nvmOk: boolean = await installNvm(progress);
+          if (!nvmOk) return false;
+        }
       }
       nodeInfo = await installNode22(progress);
       if (!nodeInfo) return false;
