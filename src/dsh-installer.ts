@@ -309,7 +309,8 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
     nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
     if (!nodeInfo || !checkNodeVersion(nodeInfo.node)) {
       // Need to install nvm + node
-      const nvmReady: boolean = isWindows ? (_process.env.NVM_HOME !== undefined && _existsSync(_process.env.NVM_HOME as string)) : _existsSync(NVM_SH);
+      const nvmHome: string | undefined = _process.env.NVM_HOME;
+      const nvmReady: boolean = isWindows ? (nvmHome !== undefined && _existsSync(nvmHome)) : _existsSync(NVM_SH);
       if (!nvmReady) {
         const nvmOk: boolean = await installNvm(progress);
         if (!nvmOk) return false;
