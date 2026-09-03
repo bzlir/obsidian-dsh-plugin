@@ -66,10 +66,36 @@ export function findNodeFromNvm(): { node: string; npm: string } | null {
   return null;
 }
 
-export function findSystemNode(): { node: string; npm: string } | null {
+function findNodeFromNvmWindows(): { node: string; npm: string } | null {
+  const nvmHome: string | undefined = _process.env.NVM_HOME;
+  if (!nvmHome) return null;
+  const nvmDir: string = nvmHome;
+  if (!_existsSync(nvmDir)) return null;
+  const dirs: string[] = [];
   try {
-    const nodePath: string = _execFileSync("which", ["node"], { stdio: ["pipe", "pipe", "pipe"] }).trim();
-    const npmPath: string = _execFileSync("which", ["npm"], { stdio: ["pipe", "pipe", "pipe"] }).trim();
+    const result: string = _execFileSync("cmd", ["/c", "dir", "/b", nvmDir], { stdio: ["pipe", "pipe", "pipe"] });
+    for (const line of result.split("\n")) {
+      const trimmed: string = line.trim();
+      if (trimmed) dirs.push(trimmed);
+    }
+  } catch {
+    return null;
+  }
+  for (let i = dirs.length - 1; i >= 0; i--) {
+    const nodePath: string = _join(nvmDir, dirs[i], "node.exe");
+    const npmPath: string = _join(nvmDir, dirs[i], "npm.cmd");
+    if (_existsSync(nodePath) && _existsSync(npmPath)) {
+      return { node: nodePath, npm: npmPath };
+    }
+  }
+  return null;
+}
+
+export function findSystemNode(): { node: string; npm: string } | null {
+  const cmd: string = _process.platform === "win32" ? "where" : "which";
+  try {
+    const nodePath: string = _execFileSync(cmd, ["node"], { stdio: ["pipe", "pipe", "pipe"] }).trim().split("\n")[0].trim();
+    const npmPath: string = _execFileSync(cmd, ["npm"], { stdio: ["pipe", "pipe", "pipe"] }).trim().split("\n")[0].trim();
     if (nodePath && npmPath) return { node: nodePath, npm: npmPath };
   } catch {
     // not on PATH
@@ -87,11 +113,12 @@ export function checkNodeVersion(nodePath: string): boolean {
 }
 
 export function checkDshInstalled(): boolean {
+  const cmd: string = _process.platform === "win32" ? "where" : "which";
   try {
-    _execFileSync("which", ["dsh"], { stdio: ["pipe", "pipe", "pipe"] });
+    _execFileSync(cmd, ["dsh"], { stdio: ["pipe", "pipe", "pipe"] });
     return true;
   } catch {
-    // Check nvm bin dirs
+    // Check nvm bin dirs (macOS/Linux)
     if (_existsSync(NVM_NODE_ROOT)) {
       try {
         const result: string = _execFileSync("ls", [NVM_NODE_ROOT], { stdio: ["pipe", "pipe", "pipe"] });
@@ -105,6 +132,12 @@ export function checkDshInstalled(): boolean {
       } catch {
         // nvm dir not readable
       }
+    }
+    // Check nvm-windows dirs
+    const winNode: { node: string; npm: string } | null = findNodeFromNvmWindows();
+    if (winNode) {
+      const dshPath: string = _join(winNode.node.substring(0, winNode.node.length - 9), "dsh.cmd");
+      if (_existsSync(dshPath)) return true;
     }
     return false;
   }
@@ -149,6 +182,13 @@ function getNvmEnv(): Record<string, string | undefined> {
 }
 
 export async function installNvm(progress: ProgressCallback): Promise<boolean> {
+  if (_process.platform === "win32") {
+    return installNvmWindows(progress);
+  }
+  return installNvmUnix(progress);
+}
+
+async function installNvmUnix(progress: ProgressCallback): Promise<boolean> {
   progress({ step: "installing-nvm", message: "Downloading and installing nvm..." });
   const result = await runCommand("bash", ["-c", `curl -fsSL ${NVM_INSTALL_URL} | bash`]);
   if (result.code !== 0 && !_existsSync(NVM_SH)) {
@@ -159,7 +199,25 @@ export async function installNvm(progress: ProgressCallback): Promise<boolean> {
   return true;
 }
 
+async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
+  progress({ step: "installing-nvm", message: "Installing nvm-windows via winget..." });
+  const wingetResult = await runCommand("winget", ["install", "coreybutler.nvmforwindows", "--accept-package-agreements", "--accept-source-agreements"]);
+  if (wingetResult.code !== 0) {
+    progress({ step: "error", message: `nvm-windows installation failed. Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
+    return false;
+  }
+  progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
+  return true;
+}
+
 export async function installNode22(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
+  if (_process.platform === "win32") {
+    return installNode22Windows(progress);
+  }
+  return installNode22Unix(progress);
+}
+
+async function installNode22Unix(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
   progress({ step: "installing-node", message: "Installing Node.js 22 via nvm..." });
   const nvmEnv: Record<string, string | undefined> = getNvmEnv();
   const result = await runCommand("bash", ["-c", `source "${NVM_SH}" && nvm install 22`], nvmEnv);
@@ -170,6 +228,31 @@ export async function installNode22(progress: ProgressCallback): Promise<{ node:
   const nodeFound: { node: string; npm: string } | null = findNodeFromNvm();
   if (!nodeFound) {
     progress({ step: "error", message: "Node.js installed but binary not found." });
+    return null;
+  }
+  if (!checkNodeVersion(nodeFound.node)) {
+    progress({ step: "error", message: "Node.js installed but version < 22." });
+    return null;
+  }
+  progress({ step: "installing-node", message: `Node.js installed: ${nodeFound.node}` });
+  return nodeFound;
+}
+
+async function installNode22Windows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
+  progress({ step: "installing-node", message: "Installing Node.js 22 via nvm-windows..." });
+  const result = await runCommand("cmd", ["/c", "nvm", "install", "22"]);
+  if (result.code !== 0) {
+    progress({ step: "error", message: `Node.js installation failed: ${result.stderr}` });
+    return null;
+  }
+  const useResult = await runCommand("cmd", ["/c", "nvm", "use", "22"]);
+  if (useResult.code !== 0) {
+    progress({ step: "error", message: `Node.js installed but nvm use failed: ${useResult.stderr}` });
+    return null;
+  }
+  const nodeFound: { node: string; npm: string } | null = findNodeFromNvmWindows() ?? findSystemNode();
+  if (!nodeFound) {
+    progress({ step: "error", message: "Node.js installed but binary not found. Try restarting Obsidian." });
     return null;
   }
   if (!checkNodeVersion(nodeFound.node)) {
@@ -210,6 +293,8 @@ export async function verifyDsh(progress: ProgressCallback): Promise<boolean> {
 }
 
 export async function runFullInstall(progress: ProgressCallback): Promise<boolean> {
+  const isWindows: boolean = _process.platform === "win32";
+
   progress({ step: "checking", message: "Checking for existing dsh..." });
   if (checkDshInstalled()) {
     progress({ step: "done", message: "dsh is already installed." });
@@ -221,10 +306,11 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     // Have node >= 22, install dsh directly
   } else {
-    nodeInfo = findNodeFromNvm();
+    nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
     if (!nodeInfo || !checkNodeVersion(nodeInfo.node)) {
       // Need to install nvm + node
-      if (!_existsSync(NVM_SH)) {
+      const nvmReady: boolean = isWindows ? (_process.env.NVM_HOME !== undefined && _existsSync(_process.env.NVM_HOME as string)) : _existsSync(NVM_SH);
+      if (!nvmReady) {
         const nvmOk: boolean = await installNvm(progress);
         if (!nvmOk) return false;
       }
