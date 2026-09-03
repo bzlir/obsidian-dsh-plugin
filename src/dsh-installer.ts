@@ -200,19 +200,21 @@ async function installNvmUnix(progress: ProgressCallback): Promise<boolean> {
 }
 
 async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
+  // Check if nvm is already installed (user may have installed it before)
+  refreshWindowsEnv();
+  const existingNvm: string | null = findNvmExe();
+  if (existingNvm) {
+    progress({ step: "installing-nvm", message: "nvm-windows already installed." });
+    return true;
+  }
+
   progress({ step: "installing-nvm", message: "Installing nvm-windows via winget..." });
   const wingetResult = await runCommand("winget", ["install", "coreybutler.nvmforwindows", "--accept-package-agreements", "--accept-source-agreements"]);
-  if (wingetResult.code !== 0) {
-    progress({ step: "error", message: `nvm-windows installation failed. Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
-    return false;
-  }
-  // winget installs nvm but doesn't update the current process PATH.
-  // Refresh NVM_HOME / NVM_SYMLINK from registry so subsequent calls find nvm.exe.
+  // winget may return non-zero even on success (e.g. already installed, or requires admin)
+  // Re-check env + filesystem regardless of winget exit code
   refreshWindowsEnv();
-  // Verify nvm.exe is now findable
   const nvmHome: string | undefined = _process.env.NVM_HOME;
   if (!nvmHome || !_existsSync(_join(nvmHome, "nvm.exe"))) {
-    // Fallback: scan common install locations
     const appData: string | undefined = _process.env.APPDATA;
     if (appData) {
       const fallbackNvm: string = _join(appData, "nvm");
@@ -221,8 +223,15 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
       }
     }
   }
-  progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
-  return true;
+  // Final check: is nvm.exe findable now?
+  const nvmExe: string | null = findNvmExe();
+  if (nvmExe) {
+    progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
+    return true;
+  }
+  // winget failed and nvm.exe not found
+  progress({ step: "error", message: `nvm-windows installation failed (winget exit code ${wingetResult.code}). Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
+  return false;
 }
 
 function refreshWindowsEnv(): void {
