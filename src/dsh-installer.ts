@@ -196,6 +196,20 @@ function getNvmEnv(): Record<string, string | undefined> {
   return env;
 }
 
+function isNvmAvailableWindows(): boolean {
+  // Method 1: findNvmExe checks env vars + filesystem + 'where nvm'
+  const nvmExe: string | null = findNvmExe();
+  if (nvmExe) return true;
+  // Method 2: try running 'nvm version' via cmd — if it works, nvm is on PATH
+  try {
+    _execFileSync("cmd", ["/c", "nvm", "version"], { stdio: ["pipe", "pipe", "pipe"] });
+    return true;
+  } catch {
+    // nvm not runnable
+  }
+  return false;
+}
+
 export async function installNvm(progress: ProgressCallback): Promise<boolean> {
   if (_process.platform === "win32") {
     return installNvmWindows(progress);
@@ -493,16 +507,11 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   } else {
     nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
     if (!nodeInfo || !checkNodeVersion(nodeInfo.node)) {
-      // Need to install nvm + node
-      const nvmHome: string | undefined = _process.env.NVM_HOME;
-      const nvmReady: boolean = isWindows ? (nvmHome !== undefined && _existsSync(nvmHome)) : _existsSync(NVM_SH);
+      // Need to install nvm + node — but first check if nvm is already available
+      const nvmReady: boolean = isWindows ? isNvmAvailableWindows() : _existsSync(NVM_SH);
       if (!nvmReady) {
-        // On Windows, also check if nvm.exe is findable even without NVM_HOME
-        const winReady: boolean = isWindows ? findNvmExe() !== null : false;
-        if (!winReady) {
-          const nvmOk: boolean = await installNvm(progress);
-          if (!nvmOk) return false;
-        }
+        const nvmOk: boolean = await installNvm(progress);
+        if (!nvmOk) return false;
       }
       nodeInfo = await installNode22(progress);
       if (!nodeInfo) return false;
