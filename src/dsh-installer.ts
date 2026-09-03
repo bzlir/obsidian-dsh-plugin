@@ -374,6 +374,17 @@ function findNvmExe(): string | null {
     const exe: string = _join(nvmSymlink, "nvm.exe");
     if (_existsSync(exe)) return exe;
   }
+  // Fallback: use 'where nvm' to find it on PATH (system PATH may have been
+  // updated after Obsidian launched, so process env is stale)
+  if (_process.platform === "win32") {
+    try {
+      const result: string = _execFileSync("where", ["nvm"], { stdio: ["pipe", "pipe", "pipe"] });
+      const firstLine: string = result.split("\n")[0].trim();
+      if (firstLine && _existsSync(firstLine)) return firstLine;
+    } catch {
+      // nvm not on PATH
+    }
+  }
   return null;
 }
 
