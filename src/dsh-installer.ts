@@ -1,13 +1,17 @@
 import { spawn, execFileSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import https from "https";
 
 const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => string;
 const _existsSync = existsSync as unknown as (path: string) => boolean;
+const _mkdirSync = mkdirSync as unknown as (path: string, options: object) => void;
+const _writeFileSync = writeFileSync as unknown as (path: string, data: Uint8Array) => void;
 const _join = join as unknown as (...paths: string[]) => string;
 const _homedir = homedir as unknown as () => string;
+const _https = https as unknown as { get: (url: string, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest };
 
 interface TypedChildProcess {
   pid: number | undefined;
@@ -19,6 +23,17 @@ interface TypedChildProcess {
 
 interface TypedStream {
   on: (event: string, listener: (data: Uint8Array | string) => void) => void;
+}
+
+interface TypedClientRequest {
+  on: (event: string, listener: (...args: never[]) => void) => void;
+  destroy: () => void;
+}
+
+interface TypedIncomingMessage {
+  statusCode: number | undefined;
+  headers: Record<string, string | string[] | undefined>;
+  on: (event: string, listener: (...args: never[]) => void) => void;
 }
 
 const _process = process as unknown as TypedProcess;
@@ -229,9 +244,94 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
     progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
     return true;
   }
-  // winget failed and nvm.exe not found
-  progress({ step: "error", message: `nvm-windows installation failed (winget exit code ${wingetResult.code}). Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
+  // winget failed and nvm.exe not found — try direct download
+  progress({ step: "installing-nvm", message: `winget failed (code ${wingetResult.code}), trying direct download...` });
+  const downloadOk: boolean = await downloadAndInstallNvmWindows(progress);
+  if (!downloadOk) return false;
+
+  // Re-check after direct install
+  refreshWindowsEnv();
+  const nvmAfterDownload: string | null = findNvmExe();
+  if (nvmAfterDownload) {
+    progress({ step: "installing-nvm", message: "nvm-windows installed via direct download." });
+    return true;
+  }
+
+  progress({ step: "error", message: `nvm-windows installation failed. Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
   return false;
+}
+
+async function downloadAndInstallNvmWindows(progress: ProgressCallback): Promise<boolean> {
+  const nvmVersion: string = "1.2.2";
+  const downloadUrl: string = `https://github.com/coreybutler/nvm-windows/releases/download/${nvmVersion}/nvm-setup.exe`;
+  const tempDir: string = _join(_homedir(), ".dsh", "downloads");
+  const exePath: string = _join(tempDir, "nvm-setup.exe");
+
+  try {
+    _mkdirSync(tempDir, { recursive: true });
+  } catch {
+    // dir may already exist
+  }
+
+  progress({ step: "installing-nvm", message: `Downloading nvm-windows ${nvmVersion}...` });
+
+  // Download via https with redirect support
+  const downloaded: boolean = await downloadFile(downloadUrl, exePath);
+  if (!downloaded) {
+    progress({ step: "error", message: `Failed to download nvm-setup.exe from ${downloadUrl}` });
+    return false;
+  }
+
+  progress({ step: "installing-nvm", message: "Running nvm-windows installer (silent)..." });
+  // Run installer silently: /S flag for NSIS installer
+  const result = await runCommand(exePath, ["/S"]);
+  if (result.code !== 0) {
+    progress({ step: "error", message: `nvm installer failed (exit ${result.code}): ${result.stderr}` });
+    return false;
+  }
+
+  return true;
+}
+
+function downloadFile(url: string, destPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const handleResponse = (response: TypedIncomingMessage): void => {
+      const statusCode: number = response.statusCode ?? 0;
+      if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+        const redirectUrl: string = Array.isArray(response.headers.location) ? response.headers.location[0] : response.headers.location;
+        const redirected: TypedClientRequest = _https.get(redirectUrl, handleResponse);
+        redirected.on("error", () => resolve(false));
+        return;
+      }
+      if (statusCode !== 200) {
+        resolve(false);
+        return;
+      }
+      const chunks: Uint8Array[] = [];
+      response.on("data", (...args: never[]) => {
+        const chunk: Uint8Array = args[0] as Uint8Array;
+        chunks.push(chunk);
+      });
+      response.on("end", (...args: never[]) => {
+        try {
+          const totalLength: number = chunks.reduce((sum: number, c: Uint8Array) => sum + c.length, 0);
+          const combined: Uint8Array = new Uint8Array(totalLength);
+          let offset: number = 0;
+          for (const chunk of chunks) {
+            combined.set(chunk, offset);
+            offset += chunk.length;
+          }
+          _writeFileSync(destPath, combined);
+          resolve(true);
+        } catch {
+          resolve(false);
+        }
+      });
+      response.on("error", () => resolve(false));
+    };
+    const req: TypedClientRequest = _https.get(url, handleResponse);
+    req.on("error", () => resolve(false));
+  });
 }
 
 function refreshWindowsEnv(): void {
