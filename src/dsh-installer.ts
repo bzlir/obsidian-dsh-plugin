@@ -207,15 +207,14 @@ function isNvmAvailableWindows(): boolean {
   } catch {
     // nvm not runnable via cmd
   }
-  // Method 3: use PowerShell to read fresh system env + run nvm
-  // PowerShell loads the full system environment, even if Obsidian's process env is stale
+  // Method 3: use PowerShell to read fresh system env
+  // Use cmd /c powershell in case powershell isn't directly on Obsidian's PATH
   try {
-    const psResult: string = _execFileSync("powershell", ["-Command", "[Environment]::GetEnvironmentVariable('NVM_HOME', 'User')"], { stdio: ["pipe", "pipe", "pipe"] });
+    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "[Environment]::GetEnvironmentVariable('NVM_HOME', 'User')"], { stdio: ["pipe", "pipe", "pipe"] });
     const psNvmHome: string = psResult.trim();
     if (psNvmHome) {
       const exe: string = _join(psNvmHome, "nvm.exe");
       if (_existsSync(exe)) {
-        // Found nvm.exe — update process env so subsequent calls find it
         _process.env.NVM_HOME = psNvmHome;
         return true;
       }
@@ -226,27 +225,19 @@ function isNvmAvailableWindows(): boolean {
   // Method 4: scan common nvm-windows install locations
   const appData: string | undefined = _process.env.APPDATA;
   if (appData) {
-    const commonPaths: string[] = [
-      _join(appData, "nvm"),
-      _join(appData, "nvm", "nvm.exe"),
-      "C:\\nvm",
-      "C:\\nvm\\nvm.exe",
-    ];
-    for (const p of commonPaths) {
-      if (_existsSync(p)) {
-        // Determine if it's the dir or the exe
-        const nvmDir: string = p.endsWith("nvm.exe") ? p.substring(0, p.length - 8) : p;
-        const exe: string = p.endsWith("nvm.exe") ? p : _join(p, "nvm.exe");
-        if (_existsSync(exe)) {
-          if (!_process.env.NVM_HOME) _process.env.NVM_HOME = nvmDir;
-          return true;
-        }
-      }
+    const appDataNvm: string = _join(appData, "nvm");
+    if (_existsSync(_join(appDataNvm, "nvm.exe"))) {
+      if (!_process.env.NVM_HOME) _process.env.NVM_HOME = appDataNvm;
+      return true;
     }
   }
-  // Method 5: try powershell 'nvm version' (fresh system PATH)
+  if (_existsSync("C:\\nvm\\nvm.exe")) {
+    if (!_process.env.NVM_HOME) _process.env.NVM_HOME = "C:\\nvm";
+    return true;
+  }
+  // Method 5: try powershell 'nvm version' via cmd (fresh system PATH)
   try {
-    _execFileSync("powershell", ["-Command", "nvm version"], { stdio: ["pipe", "pipe", "pipe"] });
+    _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "nvm version"], { stdio: ["pipe", "pipe", "pipe"] });
     return true;
   } catch {
     // nvm not runnable even via PowerShell
@@ -548,12 +539,22 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     // Have node >= 22, install dsh directly
+    progress({ step: "checking", message: "Found Node.js >= 22, installing dsh..." });
   } else {
+    // Check nvm-managed node
     nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
-    if (!nodeInfo || !checkNodeVersion(nodeInfo.node)) {
-      // Need to install nvm + node — but first check if nvm is already available
+    if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
+      progress({ step: "checking", message: "Found Node.js >= 22 via nvm, installing dsh..." });
+    } else {
+      // No suitable node found — check if nvm itself is available
+      progress({ step: "checking", message: "Checking for nvm..." });
       const nvmReady: boolean = isWindows ? isNvmAvailableWindows() : _existsSync(NVM_SH);
-      if (!nvmReady) {
+      if (nvmReady) {
+        // nvm exists but no node 22 installed yet — just install node, not nvm
+        progress({ step: "checking", message: "nvm found, but Node.js 22 not installed. Installing node..." });
+      } else {
+        // nvm not found — install nvm first
+        progress({ step: "checking", message: "nvm not found. Installing nvm..." });
         const nvmOk: boolean = await installNvm(progress);
         if (!nvmOk) return false;
       }
