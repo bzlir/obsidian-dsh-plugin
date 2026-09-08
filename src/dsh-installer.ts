@@ -1,6 +1,6 @@
 import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import https from "https";
 
@@ -10,6 +10,7 @@ const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _mkdirSync = mkdirSync as unknown as (path: string, options: object) => void;
 const _writeFileSync = writeFileSync as unknown as (path: string, data: Uint8Array) => void;
 const _join = join as unknown as (...paths: string[]) => string;
+const _dirname = dirname as unknown as (path: string) => string;
 const _homedir = homedir as unknown as () => string;
 const _https = https as unknown as { get: (url: string, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest };
 
@@ -564,6 +565,43 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   }
 
   const dshOk: boolean = await installDsh(nodeInfo.npm, progress);
+  if (!dshOk) return false;
+
+  const verified: boolean = await verifyDsh(progress);
+  return verified;
+}
+
+export async function runInstallWithNode(nodePath: string, progress: ProgressCallback, onCustomPath?: (dir: string) => void): Promise<boolean> {
+  // Validate the user-provided node path
+  if (!_existsSync(nodePath)) {
+    progress({ step: "error", message: `File not found: ${nodePath}` });
+    return false;
+  }
+
+  // Verify it's actually node >= 22
+  progress({ step: "checking", message: `Verifying Node.js at ${nodePath}...` });
+  if (!checkNodeVersion(nodePath)) {
+    progress({ step: "error", message: "Node.js found but version < 22. Please install Node.js 22+ first." });
+    return false;
+  }
+
+  // Extract npm path from node path (same directory)
+  const dir: string = _dirname(nodePath);
+  const npmName: string = _process.platform === "win32" ? "npm.cmd" : "npm";
+  const npmPath: string = _join(dir, npmName);
+
+  if (!_existsSync(npmPath)) {
+    progress({ step: "error", message: `npm not found in same directory as node: ${dir}` });
+    return false;
+  }
+
+  // Notify plugin to save this path for future sessions
+  if (onCustomPath) {
+    onCustomPath(dir);
+  }
+
+  // Install dsh using this npm
+  const dshOk: boolean = await installDsh(npmPath, progress);
   if (!dshOk) return false;
 
   const verified: boolean = await verifyDsh(progress);
