@@ -67,7 +67,7 @@ export default class DshPlugin extends Plugin {
   private async checkDshAvailability(): Promise<void> {
     const available = await this.dsh.isAvailable();
     if (!available) {
-      new DshInstallModal(this.app, () => {
+      new DshInstallModal(this.app, this, () => {
         void this.checkDshAvailability();
       }).open();
     }
@@ -76,7 +76,7 @@ export default class DshPlugin extends Plugin {
   private async openDshView(): Promise<void> {
     const available = await this.dsh.isAvailable();
     if (!available) {
-      new DshInstallModal(this.app, () => {
+      new DshInstallModal(this.app, this, () => {
         void this.checkDshAvailability();
       }).open();
       return;
