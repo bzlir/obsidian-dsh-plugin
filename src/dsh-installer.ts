@@ -290,16 +290,35 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
   progress({ step: "installing-node", message: "Installing Node.js LTS via winget..." });
   const wingetResult = await runCommand("winget", ["install", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"]);
 
-  // winget may return non-zero even on success — re-check for node
+  // winget may return non-zero even on success — re-check for node using multiple methods
   refreshWindowsPath();
-  const nodeInfo: { node: string; npm: string } | null = findSystemNode();
+
+  // Try findSystemNode first (uses 'where' with updated process.env.PATH)
+  let nodeInfo: { node: string; npm: string } | null = findSystemNode();
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     progress({ step: "installing-node", message: `Node.js installed via winget: ${nodeInfo.node}` });
     return nodeInfo;
   }
 
+  // Fallback: use PowerShell to find node (reads fresh system env)
+  try {
+    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "(Get-Command node).Source"], { stdio: ["pipe", "pipe", "pipe"] });
+    const nodePath: string = psResult.trim().split("\n")[0].trim();
+    if (nodePath && _existsSync(nodePath)) {
+      const dir: string = _dirname(nodePath);
+      const npmName: string = "npm.cmd";
+      const npmPath: string = _join(dir, npmName);
+      if (_existsSync(npmPath) && checkNodeVersion(nodePath)) {
+        progress({ step: "installing-node", message: `Node.js found via PowerShell: ${nodePath}` });
+        return { node: nodePath, npm: npmPath };
+      }
+    }
+  } catch {
+    // PowerShell couldn't find node either
+  }
+
   // winget failed and node not found — tell user to install manually
-  progress({ step: "error", message: `winget failed (exit ${wingetResult.code}). Please install Node.js 22+ manually from https://nodejs.org, then click "Enter path manually" and paste the output of 'where.exe node'.` });
+  progress({ step: "error", message: `winget install completed (exit ${wingetResult.code}) but Node.js not found. Please install Node.js 22+ manually from https://nodejs.org, then click "Enter path manually" and paste the output of 'where.exe node'.` });
   return null;
 }
 
