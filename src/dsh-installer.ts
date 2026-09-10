@@ -1,18 +1,14 @@
 import { spawn, execFileSync } from "child_process";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
-import https from "https";
 
 const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => string;
 const _existsSync = existsSync as unknown as (path: string) => boolean;
-const _mkdirSync = mkdirSync as unknown as (path: string, options: object) => void;
-const _writeFileSync = writeFileSync as unknown as (path: string, data: Uint8Array) => void;
 const _join = join as unknown as (...paths: string[]) => string;
 const _dirname = dirname as unknown as (path: string) => string;
 const _homedir = homedir as unknown as () => string;
-const _https = https as unknown as { get: (url: string, callback: (res: TypedIncomingMessage) => void) => TypedClientRequest };
 
 interface TypedChildProcess {
   pid: number | undefined;
@@ -26,22 +22,12 @@ interface TypedStream {
   on: (event: string, listener: (data: Uint8Array | string) => void) => void;
 }
 
-interface TypedClientRequest {
-  on: (event: string, listener: (...args: never[]) => void) => void;
-  destroy: () => void;
-}
-
-interface TypedIncomingMessage {
-  statusCode: number | undefined;
-  headers: Record<string, string | string[] | undefined>;
-  on: (event: string, listener: (...args: never[]) => void) => void;
-}
-
 const _process = process as unknown as TypedProcess;
 
 interface TypedProcess {
   env: Record<string, string | undefined>;
   platform: string;
+  arch: string;
 }
 
 const NVM_INSTALL_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh";
@@ -294,94 +280,63 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
     progress({ step: "installing-nvm", message: "nvm-windows installed successfully." });
     return true;
   }
-  // winget failed and nvm.exe not found — try direct download
-  progress({ step: "installing-nvm", message: `winget failed (code ${wingetResult.code}), trying direct download...` });
-  const downloadOk: boolean = await downloadAndInstallNvmWindows(progress);
-  if (!downloadOk) return false;
-
-  // Re-check after direct install
-  refreshWindowsEnv();
-  const nvmAfterDownload: string | null = findNvmExe();
-  if (nvmAfterDownload) {
-    progress({ step: "installing-nvm", message: "nvm-windows installed via direct download." });
-    return true;
-  }
-
-  progress({ step: "error", message: `nvm-windows installation failed. Try manual install from https://github.com/coreybutler/nvm-windows/releases. Error: ${wingetResult.stderr}` });
+  // winget failed and nvm.exe not found — tell user
+  progress({ step: "error", message: `winget failed (code ${wingetResult.code}). Try manual install from https://github.com/coreybutler/nvm-windows/releases, or install Node.js directly from https://nodejs.org.` });
   return false;
 }
 
-async function downloadAndInstallNvmWindows(progress: ProgressCallback): Promise<boolean> {
-  const nvmVersion: string = "1.2.2";
-  const downloadUrl: string = `https://github.com/coreybutler/nvm-windows/releases/download/${nvmVersion}/nvm-setup.exe`;
-  const tempDir: string = _join(_homedir(), ".dsh", "downloads");
-  const exePath: string = _join(tempDir, "nvm-setup.exe");
+async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
+  // Method 1: try winget install OpenJS.NodeJS.LTS
+  progress({ step: "installing-node", message: "Installing Node.js LTS via winget..." });
+  const wingetResult = await runCommand("winget", ["install", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"]);
 
-  try {
-    _mkdirSync(tempDir, { recursive: true });
-  } catch {
-    // dir may already exist
+  // winget may return non-zero even on success — re-check for node
+  refreshWindowsPath();
+  const nodeInfo: { node: string; npm: string } | null = findSystemNode();
+  if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
+    progress({ step: "installing-node", message: `Node.js installed via winget: ${nodeInfo.node}` });
+    return nodeInfo;
   }
 
-  progress({ step: "installing-nvm", message: `Downloading nvm-windows ${nvmVersion}...` });
-
-  // Download via https with redirect support
-  const downloaded: boolean = await downloadFile(downloadUrl, exePath);
-  if (!downloaded) {
-    progress({ step: "error", message: `Failed to download nvm-setup.exe from ${downloadUrl}` });
-    return false;
-  }
-
-  progress({ step: "installing-nvm", message: "Running nvm-windows installer (silent)..." });
-  // Run installer silently: /S flag for NSIS installer
-  const result = await runCommand(exePath, ["/S"]);
-  if (result.code !== 0) {
-    progress({ step: "error", message: `nvm installer failed (exit ${result.code}): ${result.stderr}` });
-    return false;
-  }
-
-  return true;
+  // winget failed and node not found — tell user to install manually
+  progress({ step: "error", message: `winget failed (exit ${wingetResult.code}). Please install Node.js 22+ manually from https://nodejs.org, then click "Enter path manually" and paste the output of 'where.exe node'.` });
+  return null;
 }
 
-function downloadFile(url: string, destPath: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const handleResponse = (response: TypedIncomingMessage): void => {
-      const statusCode: number = response.statusCode ?? 0;
-      if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
-        const redirectUrl: string = Array.isArray(response.headers.location) ? response.headers.location[0] : response.headers.location;
-        const redirected: TypedClientRequest = _https.get(redirectUrl, handleResponse);
-        redirected.on("error", () => resolve(false));
-        return;
-      }
-      if (statusCode !== 200) {
-        resolve(false);
-        return;
-      }
-      const chunks: Uint8Array[] = [];
-      response.on("data", (...args: never[]) => {
-        const chunk: Uint8Array = args[0] as Uint8Array;
-        chunks.push(chunk);
-      });
-      response.on("end", (...args: never[]) => {
-        try {
-          const totalLength: number = chunks.reduce((sum: number, c: Uint8Array) => sum + c.length, 0);
-          const combined: Uint8Array = new Uint8Array(totalLength);
-          let offset: number = 0;
-          for (const chunk of chunks) {
-            combined.set(chunk, offset);
-            offset += chunk.length;
-          }
-          _writeFileSync(destPath, combined);
-          resolve(true);
-        } catch {
-          resolve(false);
+function refreshWindowsPath(): void {
+  // Refresh process PATH from registry (winget may have updated system PATH)
+  try {
+    const regResult: string = _execFileSync("reg", ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
+    const lines: string[] = regResult.split("\n");
+    for (const line of lines) {
+      const trimmed: string = line.trim();
+      if (trimmed.startsWith("Path")) {
+        const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
+        if (match) {
+          _process.env.PATH = match[1].trim();
         }
-      });
-      response.on("error", () => resolve(false));
-    };
-    const req: TypedClientRequest = _https.get(url, handleResponse);
-    req.on("error", () => resolve(false));
-  });
+      }
+    }
+  } catch {
+    // registry query failed
+  }
+  // Also check user-level PATH
+  try {
+    const regResult: string = _execFileSync("reg", ["query", "HKCU\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
+    const lines: string[] = regResult.split("\n");
+    for (const line of lines) {
+      const trimmed: string = line.trim();
+      if (trimmed.startsWith("Path")) {
+        const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
+        if (match) {
+          const userPath: string = match[1].trim();
+          _process.env.PATH = _process.env.PATH + ";" + userPath;
+        }
+      }
+    }
+  } catch {
+    // registry query failed
+  }
 }
 
 function refreshWindowsEnv(): void {
@@ -539,28 +494,31 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   progress({ step: "checking", message: "Checking for Node.js >= 22..." });
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
-    // Have node >= 22, install dsh directly
     progress({ step: "checking", message: "Found Node.js >= 22, installing dsh..." });
   } else {
-    // Check nvm-managed node
     nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
     if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
       progress({ step: "checking", message: "Found Node.js >= 22 via nvm, installing dsh..." });
     } else {
-      // No suitable node found — check if nvm itself is available
-      progress({ step: "checking", message: "Checking for nvm..." });
-      const nvmReady: boolean = isWindows ? isNvmAvailableWindows() : _existsSync(NVM_SH);
-      if (nvmReady) {
-        // nvm exists but no node 22 installed yet — just install node, not nvm
-        progress({ step: "checking", message: "nvm found, but Node.js 22 not installed. Installing node..." });
+      if (isWindows) {
+        // Windows: download Node.js standalone binary (no nvm needed)
+        progress({ step: "installing-node", message: "Node.js >= 22 not found. Downloading Node.js standalone binary..." });
+        nodeInfo = await downloadAndInstallNodeWindows(progress);
+        if (!nodeInfo) return false;
       } else {
-        // nvm not found — install nvm first
-        progress({ step: "checking", message: "nvm not found. Installing nvm..." });
-        const nvmOk: boolean = await installNvm(progress);
-        if (!nvmOk) return false;
+        // macOS/Linux: use nvm
+        progress({ step: "checking", message: "Checking for nvm..." });
+        const nvmReady: boolean = _existsSync(NVM_SH);
+        if (nvmReady) {
+          progress({ step: "checking", message: "nvm found, but Node.js 22 not installed. Installing node..." });
+        } else {
+          progress({ step: "checking", message: "nvm not found. Installing nvm..." });
+          const nvmOk: boolean = await installNvm(progress);
+          if (!nvmOk) return false;
+        }
+        nodeInfo = await installNode22(progress);
+        if (!nodeInfo) return false;
       }
-      nodeInfo = await installNode22(progress);
-      if (!nodeInfo) return false;
     }
   }
 
