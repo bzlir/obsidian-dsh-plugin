@@ -42,6 +42,7 @@ const _process = process as unknown as TypedProcess;
 interface TypedProcess {
   env: Record<string, string | undefined>;
   platform: string;
+  arch: string;
 }
 
 const NVM_INSTALL_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh";
@@ -49,6 +50,9 @@ const NVM_DIR = _join(_homedir(), ".nvm");
 const NVM_SH = _join(NVM_DIR, "nvm.sh");
 const NVM_NODE_ROOT = _join(NVM_DIR, "versions", "node");
 const DSH_PACKAGE = "@deepseek-ai/dsh";
+const DSH_HOME = _join(_homedir(), ".dsh");
+const NODE_STANDALONE_DIR = _join(DSH_HOME, "node");
+const NODE_WIN_VERSION = "v22.11.0";
 
 export type InstallStep = "idle" | "checking" | "installing-nvm" | "installing-node" | "installing-dsh" | "verifying" | "done" | "error";
 
@@ -384,6 +388,71 @@ function downloadFile(url: string, destPath: string): Promise<boolean> {
   });
 }
 
+async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
+  const arch: string = _process.arch === "arm64" ? "win-arm64" : "win-x64";
+  const zipName: string = `node-${NODE_WIN_VERSION}-${arch}.zip`;
+  const downloadUrl: string = `https://nodejs.org/dist/${NODE_WIN_VERSION}/${zipName}`;
+  const downloadsDir: string = _join(DSH_HOME, "downloads");
+  const zipPath: string = _join(downloadsDir, zipName);
+
+  // Create downloads dir
+  try {
+    _mkdirSync(downloadsDir, { recursive: true });
+  } catch {
+    // dir may already exist
+  }
+
+  // Check if already downloaded and extracted
+  const extractedDir: string = _join(NODE_STANDALONE_DIR, `node-${NODE_WIN_VERSION}-${arch}`);
+  const nodeExePath: string = _join(extractedDir, "node.exe");
+  const npmCmdPath: string = _join(extractedDir, "npm.cmd");
+  if (_existsSync(nodeExePath) && _existsSync(npmCmdPath) && checkNodeVersion(nodeExePath)) {
+    progress({ step: "installing-node", message: "Node.js standalone binary already downloaded." });
+    return { node: nodeExePath, npm: npmCmdPath };
+  }
+
+  // Download the zip
+  progress({ step: "installing-node", message: `Downloading Node.js ${NODE_WIN_VERSION} (${arch})...` });
+  const downloaded: boolean = await downloadFile(downloadUrl, zipPath);
+  if (!downloaded) {
+    progress({ step: "error", message: `Failed to download Node.js from ${downloadUrl}` });
+    return null;
+  }
+
+  // Extract using PowerShell Expand-Archive
+  progress({ step: "installing-node", message: "Extracting Node.js..." });
+  try {
+    _mkdirSync(NODE_STANDALONE_DIR, { recursive: true });
+  } catch {
+    // dir may already exist
+  }
+  const extractResult = await runCommand("cmd", ["/c", "powershell", "-NoProfile", "-Command",
+    `Expand-Archive -Path '${zipPath}' -DestinationPath '${NODE_STANDALONE_DIR}' -Force`]);
+  if (extractResult.code !== 0) {
+    // Fallback: try tar (available on Windows 10 1803+)
+    const tarResult = await runCommand("cmd", ["/c", "tar", "-xf", zipPath, "-C", NODE_STANDALONE_DIR]);
+    if (tarResult.code !== 0) {
+      progress({ step: "error", message: `Failed to extract Node.js. PowerShell: ${extractResult.stderr}; tar: ${tarResult.stderr}` });
+      return null;
+    }
+  }
+
+  // Verify extraction
+  if (!_existsSync(nodeExePath) || !_existsSync(npmCmdPath)) {
+    progress({ step: "error", message: `Node.js extracted but binaries not found at ${extractedDir}` });
+    return null;
+  }
+
+  // Verify version
+  if (!checkNodeVersion(nodeExePath)) {
+    progress({ step: "error", message: "Node.js installed but version < 22." });
+    return null;
+  }
+
+  progress({ step: "installing-node", message: `Node.js installed: ${nodeExePath}` });
+  return { node: nodeExePath, npm: npmCmdPath };
+}
+
 function refreshWindowsEnv(): void {
   // Read NVM_HOME and NVM_SYMLINK from registry (set by nvm-windows installer)
   try {
@@ -546,9 +615,10 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
       progress({ step: "checking", message: "Found Node.js >= 22 via nvm, installing dsh..." });
     } else {
       if (isWindows) {
-        // Windows: skip nvm installation — direct the user to provide node path manually
-        progress({ step: "error", message: "Node.js >= 22 not found. Click 'Enter path manually' and paste the output of 'where.exe node' from PowerShell." });
-        return false;
+        // Windows: download Node.js standalone binary (no nvm needed)
+        progress({ step: "installing-node", message: "Node.js >= 22 not found. Downloading Node.js standalone binary..." });
+        nodeInfo = await downloadAndInstallNodeWindows(progress);
+        if (!nodeInfo) return false;
       } else {
         // macOS/Linux: use nvm
         progress({ step: "checking", message: "Checking for nvm..." });
