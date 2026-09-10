@@ -539,28 +539,30 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   progress({ step: "checking", message: "Checking for Node.js >= 22..." });
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
-    // Have node >= 22, install dsh directly
     progress({ step: "checking", message: "Found Node.js >= 22, installing dsh..." });
   } else {
-    // Check nvm-managed node
     nodeInfo = isWindows ? findNodeFromNvmWindows() : findNodeFromNvm();
     if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
       progress({ step: "checking", message: "Found Node.js >= 22 via nvm, installing dsh..." });
     } else {
-      // No suitable node found — check if nvm itself is available
-      progress({ step: "checking", message: "Checking for nvm..." });
-      const nvmReady: boolean = isWindows ? isNvmAvailableWindows() : _existsSync(NVM_SH);
-      if (nvmReady) {
-        // nvm exists but no node 22 installed yet — just install node, not nvm
-        progress({ step: "checking", message: "nvm found, but Node.js 22 not installed. Installing node..." });
+      if (isWindows) {
+        // Windows: skip nvm installation — direct the user to provide node path manually
+        progress({ step: "error", message: "Node.js >= 22 not found. Click 'Enter path manually' and paste the output of 'where.exe node' from PowerShell." });
+        return false;
       } else {
-        // nvm not found — install nvm first
-        progress({ step: "checking", message: "nvm not found. Installing nvm..." });
-        const nvmOk: boolean = await installNvm(progress);
-        if (!nvmOk) return false;
+        // macOS/Linux: use nvm
+        progress({ step: "checking", message: "Checking for nvm..." });
+        const nvmReady: boolean = _existsSync(NVM_SH);
+        if (nvmReady) {
+          progress({ step: "checking", message: "nvm found, but Node.js 22 not installed. Installing node..." });
+        } else {
+          progress({ step: "checking", message: "nvm not found. Installing nvm..." });
+          const nvmOk: boolean = await installNvm(progress);
+          if (!nvmOk) return false;
+        }
+        nodeInfo = await installNode22(progress);
+        if (!nodeInfo) return false;
       }
-      nodeInfo = await installNode22(progress);
-      if (!nodeInfo) return false;
     }
   }
 
