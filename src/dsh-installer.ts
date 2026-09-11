@@ -288,13 +288,19 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
 async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
   // Method 1: try winget install OpenJS.NodeJS.LTS
   progress({ step: "installing-node", message: "Installing Node.js LTS via winget..." });
+  console.log("[DSH-INSTALL] Starting winget install OpenJS.NodeJS.LTS");
   const wingetResult = await runCommand("winget", ["install", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"]);
+  console.log("[DSH-INSTALL] winget exit code:", wingetResult.code);
+  console.log("[DSH-INSTALL] winget stdout:", wingetResult.stdout.substring(0, 500));
+  console.log("[DSH-INSTALL] winget stderr:", wingetResult.stderr.substring(0, 500));
 
-  // winget may return non-zero even on success — re-check for node using multiple methods
+  // Refresh PATH from registry (winget may have updated system PATH)
   refreshWindowsPath();
+  console.log("[DSH-INSTALL] PATH after refresh:", _process.env.PATH?.substring(0, 200));
 
   // Try findSystemNode first (uses 'where' with updated process.env.PATH)
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
+  console.log("[DSH-INSTALL] findSystemNode result:", nodeInfo);
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     progress({ step: "installing-node", message: `Node.js installed via winget: ${nodeInfo.node}` });
     return nodeInfo;
@@ -302,8 +308,10 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
 
   // Fallback: use PowerShell to find node (reads fresh system env)
   try {
+    console.log("[DSH-INSTALL] Trying PowerShell Get-Command node");
     const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "(Get-Command node).Source"], { stdio: ["pipe", "pipe", "pipe"] });
     const nodePath: string = psResult.trim().split("\n")[0].trim();
+    console.log("[DSH-INSTALL] PowerShell found node at:", nodePath);
     if (nodePath && _existsSync(nodePath)) {
       const dir: string = _dirname(nodePath);
       const npmName: string = "npm.cmd";
@@ -313,8 +321,8 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
         return { node: nodePath, npm: npmPath };
       }
     }
-  } catch {
-    // PowerShell couldn't find node either
+  } catch (psErr: unknown) {
+    console.log("[DSH-INSTALL] PowerShell Get-Command failed:", (psErr as Error).message);
   }
 
   // winget failed and node not found — tell user to install manually
@@ -323,38 +331,35 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
 }
 
 function refreshWindowsPath(): void {
-  // Refresh process PATH from registry (winget may have updated system PATH)
+  // Use PowerShell to get the EXPANDED system + user PATH from registry.
+  // reg query returns REG_EXPAND_SZ with %SystemRoot% etc. — unexpanded,
+  // so setting it directly into process.env.PATH doesn't work.
+  // PowerShell [Environment]::GetEnvironmentVariable expands variables.
   try {
-    const regResult: string = _execFileSync("reg", ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
-    const lines: string[] = regResult.split("\n");
-    for (const line of lines) {
-      const trimmed: string = line.trim();
-      if (trimmed.startsWith("Path")) {
-        const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
-        if (match) {
-          _process.env.PATH = match[1].trim();
-        }
-      }
+    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command",
+      "[Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')"],
+      { stdio: ["pipe", "pipe", "pipe"] });
+    const expandedPath: string = psResult.trim();
+    if (expandedPath) {
+      _process.env.PATH = expandedPath;
     }
   } catch {
-    // registry query failed
-  }
-  // Also check user-level PATH
-  try {
-    const regResult: string = _execFileSync("reg", ["query", "HKCU\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
-    const lines: string[] = regResult.split("\n");
-    for (const line of lines) {
-      const trimmed: string = line.trim();
-      if (trimmed.startsWith("Path")) {
-        const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
-        if (match) {
-          const userPath: string = match[1].trim();
-          _process.env.PATH = _process.env.PATH + ";" + userPath;
+    // PowerShell not available — try reg query as fallback (may have unexpanded vars)
+    try {
+      const regResult: string = _execFileSync("reg", ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
+      const lines: string[] = regResult.split("\n");
+      for (const line of lines) {
+        const trimmed: string = line.trim();
+        if (trimmed.startsWith("Path")) {
+          const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
+          if (match) {
+            _process.env.PATH = match[1].trim();
+          }
         }
       }
+    } catch {
+      // registry query failed
     }
-  } catch {
-    // registry query failed
   }
 }
 
@@ -503,15 +508,18 @@ export async function verifyDsh(progress: ProgressCallback): Promise<boolean> {
 
 export async function runFullInstall(progress: ProgressCallback): Promise<boolean> {
   const isWindows: boolean = _process.platform === "win32";
+  console.log("[DSH-INSTALL] runFullInstall started, isWindows:", isWindows);
 
   progress({ step: "checking", message: "Checking for existing dsh..." });
   if (checkDshInstalled()) {
+    console.log("[DSH-INSTALL] dsh already installed");
     progress({ step: "done", message: "dsh is already installed." });
     return true;
   }
 
   progress({ step: "checking", message: "Checking for Node.js >= 22..." });
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
+  console.log("[DSH-INSTALL] findSystemNode:", nodeInfo);
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     progress({ step: "checking", message: "Found Node.js >= 22, installing dsh..." });
   } else {
