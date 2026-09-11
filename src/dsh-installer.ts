@@ -286,7 +286,16 @@ async function installNvmWindows(progress: ProgressCallback): Promise<boolean> {
 }
 
 async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promise<{ node: string; npm: string } | null> {
-  // Method 1: try winget install OpenJS.NodeJS.LTS
+  // Check if node is already installed (before trying winget)
+  // Use PowerShell — most reliable way to find node on Windows regardless
+  // of Obsidian's stale process env
+  const existingNode: { node: string; npm: string } | null = findNodeViaPowerShell();
+  if (existingNode && checkNodeVersion(existingNode.node)) {
+    progress({ step: "installing-node", message: `Node.js already installed: ${existingNode.node}` });
+    return existingNode;
+  }
+
+  // Try winget install
   progress({ step: "installing-node", message: "Installing Node.js LTS via winget..." });
   console.log("[DSH-INSTALL] Starting winget install OpenJS.NodeJS.LTS");
   const wingetResult = await runCommand("winget", ["install", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"]);
@@ -294,39 +303,44 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
   console.log("[DSH-INSTALL] winget stdout:", wingetResult.stdout.substring(0, 500));
   console.log("[DSH-INSTALL] winget stderr:", wingetResult.stderr.substring(0, 500));
 
-  // Refresh PATH from registry (winget may have updated system PATH)
-  refreshWindowsPath();
-  console.log("[DSH-INSTALL] PATH after refresh:", _process.env.PATH?.substring(0, 200));
-
-  // Try findSystemNode first (uses 'where' with updated process.env.PATH)
-  let nodeInfo: { node: string; npm: string } | null = findSystemNode();
-  console.log("[DSH-INSTALL] findSystemNode result:", nodeInfo);
+  // Regardless of winget exit code, try to find node via PowerShell
+  // (winget may report failure but node may still be installed)
+  const nodeInfo: { node: string; npm: string } | null = findNodeViaPowerShell();
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
-    progress({ step: "installing-node", message: `Node.js installed via winget: ${nodeInfo.node}` });
+    progress({ step: "installing-node", message: `Node.js installed: ${nodeInfo.node}` });
     return nodeInfo;
   }
 
-  // Fallback: use PowerShell to find node (reads fresh system env)
+  // Node not found — tell user to install manually
+  progress({ step: "error", message: `winget install completed (exit ${wingetResult.code}) but Node.js not found. Please install Node.js 22+ manually from https://nodejs.org, then click "Enter path manually" and paste the output of 'where.exe node'.` });
+  return null;
+}
+
+function findNodeViaPowerShell(): { node: string; npm: string } | null {
+  // Use PowerShell to find node — reads fresh system env, not Obsidian's stale process env
   try {
     console.log("[DSH-INSTALL] Trying PowerShell Get-Command node");
-    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "(Get-Command node).Source"], { stdio: ["pipe", "pipe", "pipe"] });
+    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "(Get-Command node -ErrorAction SilentlyContinue).Source"], { stdio: ["pipe", "pipe", "pipe"] });
     const nodePath: string = psResult.trim().split("\n")[0].trim();
     console.log("[DSH-INSTALL] PowerShell found node at:", nodePath);
     if (nodePath && _existsSync(nodePath)) {
       const dir: string = _dirname(nodePath);
       const npmName: string = "npm.cmd";
       const npmPath: string = _join(dir, npmName);
-      if (_existsSync(npmPath) && checkNodeVersion(nodePath)) {
-        progress({ step: "installing-node", message: `Node.js found via PowerShell: ${nodePath}` });
+      if (_existsSync(npmPath)) {
+        console.log("[DSH-INSTALL] Found npm at:", npmPath);
         return { node: nodePath, npm: npmPath };
+      }
+      // npm might be npm without .cmd
+      const npmAlt: string = _join(dir, "npm");
+      if (_existsSync(npmAlt)) {
+        console.log("[DSH-INSTALL] Found npm at:", npmAlt);
+        return { node: nodePath, npm: npmAlt };
       }
     }
   } catch (psErr: unknown) {
     console.log("[DSH-INSTALL] PowerShell Get-Command failed:", (psErr as Error).message);
   }
-
-  // winget failed and node not found — tell user to install manually
-  progress({ step: "error", message: `winget install completed (exit ${wingetResult.code}) but Node.js not found. Please install Node.js 22+ manually from https://nodejs.org, then click "Enter path manually" and paste the output of 'where.exe node'.` });
   return null;
 }
 
