@@ -69,17 +69,21 @@ export class DshInstallModal extends Modal {
       .setDesc("Open PowerShell and run:");
     const pre: HTMLElement = cmdSetting.infoEl.createEl("pre", { cls: "dsh-install-cmd" });
     const platform: string = (process as { platform: string }).platform;
-    const cmd: string = platform === "win32" ? "where node" : "which node";
+    const cmd: string = platform === "win32" ? "where.exe node" : "which node";
     pre.createEl("code", { text: cmd });
 
     new Setting(contentEl)
       .setName("Step 2: Paste the path here")
-      .setDesc("Paste the full path to node (e.g. C:\\Users\\you\\AppData\\Roaming\\nvm\\v22.11.0\\node.exe)")
+      .setDesc("Paste the full path to node (e.g. C:\\Program Files\\nodejs\\node.exe)")
       .addText((text: TextComponent) => {
-        text.setPlaceholder("C:\\path\\to\\node.exe").onChange((val: string) => {
-          this.manualNodePath = val.trim();
+        text.setPlaceholder("C:\\path\\to\\node.exe");
+        text.inputEl.addEventListener("input", () => {
+          this.manualNodePath = text.getValue().trim();
         });
       });
+
+    this.progressEl = contentEl.createDiv({ cls: "dsh-install-progress" });
+    this.progressEl.hide();
 
     new Setting(contentEl)
       .addButton((btn: ButtonComponent) => {
@@ -142,7 +146,9 @@ export class DshInstallModal extends Modal {
       return;
     }
 
-    this.renderInstallingMode();
+    // Show progress below buttons, don't destroy the buttons
+    this.progressEl?.show();
+    this.updateProgress({ step: "checking", message: `Verifying node at ${this.manualNodePath}...` });
     btn.setButtonText("Installing...").setDisabled(true);
 
     const callback: ProgressCallback = (progress: InstallProgress) => {
