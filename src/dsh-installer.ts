@@ -183,55 +183,6 @@ function getNvmEnv(): Record<string, string | undefined> {
   return env;
 }
 
-function isNvmAvailableWindows(): boolean {
-  // Method 1: findNvmExe checks env vars + filesystem + 'where nvm'
-  const nvmExe: string | null = findNvmExe();
-  if (nvmExe) return true;
-  // Method 2: try running 'nvm version' via cmd — if it works, nvm is on PATH
-  try {
-    _execFileSync("cmd", ["/c", "nvm", "version"], { stdio: ["pipe", "pipe", "pipe"] });
-    return true;
-  } catch {
-    // nvm not runnable via cmd
-  }
-  // Method 3: use PowerShell to read fresh system env
-  // Use cmd /c powershell in case powershell isn't directly on Obsidian's PATH
-  try {
-    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "[Environment]::GetEnvironmentVariable('NVM_HOME', 'User')"], { stdio: ["pipe", "pipe", "pipe"] });
-    const psNvmHome: string = psResult.trim();
-    if (psNvmHome) {
-      const exe: string = _join(psNvmHome, "nvm.exe");
-      if (_existsSync(exe)) {
-        _process.env.NVM_HOME = psNvmHome;
-        return true;
-      }
-    }
-  } catch {
-    // PowerShell not available
-  }
-  // Method 4: scan common nvm-windows install locations
-  const appData: string | undefined = _process.env.APPDATA;
-  if (appData) {
-    const appDataNvm: string = _join(appData, "nvm");
-    if (_existsSync(_join(appDataNvm, "nvm.exe"))) {
-      if (!_process.env.NVM_HOME) _process.env.NVM_HOME = appDataNvm;
-      return true;
-    }
-  }
-  if (_existsSync("C:\\nvm\\nvm.exe")) {
-    if (!_process.env.NVM_HOME) _process.env.NVM_HOME = "C:\\nvm";
-    return true;
-  }
-  // Method 5: try powershell 'nvm version' via cmd (fresh system PATH)
-  try {
-    _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "nvm version"], { stdio: ["pipe", "pipe", "pipe"] });
-    return true;
-  } catch {
-    // nvm not runnable even via PowerShell
-  }
-  return false;
-}
-
 export async function installNvm(progress: ProgressCallback): Promise<boolean> {
   if (_process.platform === "win32") {
     return installNvmWindows(progress);
@@ -342,39 +293,6 @@ function findNodeViaPowerShell(): { node: string; npm: string } | null {
     console.log("[DSH-INSTALL] PowerShell Get-Command failed:", (psErr as Error).message);
   }
   return null;
-}
-
-function refreshWindowsPath(): void {
-  // Use PowerShell to get the EXPANDED system + user PATH from registry.
-  // reg query returns REG_EXPAND_SZ with %SystemRoot% etc. — unexpanded,
-  // so setting it directly into process.env.PATH doesn't work.
-  // PowerShell [Environment]::GetEnvironmentVariable expands variables.
-  try {
-    const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command",
-      "[Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')"],
-      { stdio: ["pipe", "pipe", "pipe"] });
-    const expandedPath: string = psResult.trim();
-    if (expandedPath) {
-      _process.env.PATH = expandedPath;
-    }
-  } catch {
-    // PowerShell not available — try reg query as fallback (may have unexpanded vars)
-    try {
-      const regResult: string = _execFileSync("reg", ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "/v", "Path"], { stdio: ["pipe", "pipe", "pipe"] });
-      const lines: string[] = regResult.split("\n");
-      for (const line of lines) {
-        const trimmed: string = line.trim();
-        if (trimmed.startsWith("Path")) {
-          const match: RegExpMatchArray | null = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/.exec(trimmed);
-          if (match) {
-            _process.env.PATH = match[1].trim();
-          }
-        }
-      }
-    } catch {
-      // registry query failed
-    }
-  }
 }
 
 function refreshWindowsEnv(): void {
