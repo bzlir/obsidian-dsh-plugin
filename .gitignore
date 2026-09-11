@@ -4,9 +4,10 @@ main.js
 dist/
 .DS_Store
 data.json
-scripts/
-backups/
 scripts/backups/
+scripts/install.sh
+scripts/rollback.sh
+scripts/uninstall.sh
 .playwright-cli/
 AGENTS.md
 working.md
