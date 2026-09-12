@@ -10,4 +10,4 @@ scripts/rollback.sh
 scripts/uninstall.sh
 .playwright-cli/
 AGENTS.md
-working.md
+docs/working.md
