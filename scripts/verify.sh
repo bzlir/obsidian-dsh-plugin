@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0
 FAIL=0
 SKIPPED=0
+TEST_PORT=18999
 
 green() { printf "\033[32m%s\033[0m\n" "$1"; }
 red()   { printf "\033[31m%s\033[0m\n" "$1"; }
@@ -127,33 +128,56 @@ echo "[6/13] DSH web startup + API readiness"
 
 if [ -z "$DSH_PATH" ]; then
   check "dsh web startup test" skip
-  check "API readiness (session.list probe)" skip
+  check "launch token printed" skip
+  check "index with token (cookie exchange)" skip
+  check "API readiness (session/list probe)" skip
 else
-  TEST_PORT=18999
   cd /tmp
+  rm -f /tmp/dsh-verify.log /tmp/dsh-verify-jar
   dsh web --port $TEST_PORT --host 127.0.0.1 --no-open > /tmp/dsh-verify.log 2>&1 &
   DSH_PID=$!
 
-  # Wait for dsh web to be ready (poll up to 60 seconds)
-  HTTP_CODE="000"
+  # Wait for the launch token on stdout (up to 60 seconds)
+  TOKEN=""
   for i in $(seq 1 60); do
     sleep 1
-    HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:$TEST_PORT/ 2>/dev/null || echo "000")
-    if [ "$HTTP_CODE" = "200" ]; then
+    TOKEN=$(grep -oE '\?token=[A-Za-z0-9_-]+' /tmp/dsh-verify.log 2>/dev/null | head -1 | cut -d= -f2)
+    if [ -n "$TOKEN" ]; then
+      break
+    fi
+    if ! kill -0 $DSH_PID 2>/dev/null; then
       break
     fi
   done
-  if [ "$HTTP_CODE" = "200" ]; then
-    check "dsh web starts and serves HTTP 200" pass
+  if [ -n "$TOKEN" ]; then
+    check "dsh web prints launch token" pass
   else
-    check "dsh web starts and serves HTTP 200 (got $HTTP_CODE)" fail
+    check "dsh web prints launch token" fail
   fi
 
-  # Also poll for API readiness (up to 60 seconds)
+  # Exchange token for a session cookie and fetch the index (up to 30 seconds)
+  HTTP_CODE="000"
+  if [ -n "$TOKEN" ]; then
+    for i in $(seq 1 30); do
+      sleep 1
+      HTTP_CODE=$(curl -sS -c /tmp/dsh-verify-jar -b /tmp/dsh-verify-jar -o /dev/null -w "%{http_code}" "http://127.0.0.1:$TEST_PORT/?token=$TOKEN" 2>/dev/null || echo "000")
+      if [ "$HTTP_CODE" = "200" ]; then
+        break
+      fi
+    done
+  fi
+  if [ "$HTTP_CODE" = "200" ]; then
+    check "index loads with token (got HTTP 200)" pass
+  else
+    check "index loads with token (got $HTTP_CODE)" fail
+  fi
+
+  # Poll for API readiness with the session cookie (up to 60 seconds).
+  # New-protocol envelope: slash endpoint + {args:{_request:{}}}.
   API_OK=false
   for i in $(seq 1 60); do
     sleep 1
-    API_BODY=$(curl -sS -m 5 http://127.0.0.1:$TEST_PORT/api/session.list -X POST -H "Content-Type: application/json" -d '{"type":"client-request","rpcId":"verify","method":"session.list","payload":{"cursor":null,"limit":1}}' 2>/dev/null || echo "")
+    API_BODY=$(curl -sS -m 5 -b /tmp/dsh-verify-jar http://127.0.0.1:$TEST_PORT/api/session/list -X POST -H "Content-Type: application/json" -d '{"type":"client-request","rpcId":"verify","method":"session/list","payload":{"args":{"_request":{}}}}' 2>/dev/null || echo "")
     if echo "$API_BODY" | grep -q "server-response" 2>/dev/null; then
       API_OK=true
       break
@@ -161,9 +185,9 @@ else
   done
 
   if [ "$API_OK" = "true" ]; then
-    check "API readiness (session.list returns server-response)" pass
+    check "API readiness (session/list returns server-response)" pass
   else
-    check "API readiness (session.list returns server-response)" fail
+    check "API readiness (session/list returns server-response)" fail
   fi
 
   kill $DSH_PID 2>/dev/null || true

@@ -48,9 +48,15 @@ export class DshView extends ItemView {
 
       const port = await this.dsh.start(vaultPath);
 
+      // Load through the plugin's auth proxy: dsh's SameSite=Strict cookie
+      // is never sent back from a cross-site (app://) iframe, so the proxy
+      // attaches the session cookie server-side. Fall back to the token URL
+      // (then the bare URL) only if the proxy is unavailable.
+      const src: string =
+        this.dsh.getProxyUrl() ?? this.dsh.getAuthedUrl() ?? `http://127.0.0.1:${port}`;
       this.iframe = this.contentEl.createEl("iframe", {
         attr: {
-          src: `http://127.0.0.1:${port}`,
+          src,
           allow: "clipboard-read; clipboard-write",
         },
       });

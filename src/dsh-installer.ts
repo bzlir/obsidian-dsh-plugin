@@ -1,11 +1,12 @@
 import { spawn, execFileSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
 const _spawn = spawn as unknown as (command: string, args: string[], options: object) => TypedChildProcess;
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => string;
 const _existsSync = existsSync as unknown as (path: string) => boolean;
+const _mkdirSync = mkdirSync as unknown as (path: string, options: { recursive: boolean }) => void;
 const _join = join as unknown as (...paths: string[]) => string;
 const _dirname = dirname as unknown as (path: string) => string;
 const _homedir = homedir as unknown as () => string;
@@ -147,7 +148,22 @@ export function checkDshInstalled(): boolean {
 
 function runCommand(command: string, args: string[], env?: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const child: TypedChildProcess = _spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
+    let child: TypedChildProcess;
+    try {
+      if (_process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+        // Node cannot spawn .cmd/.bat directly (throws EINVAL/ENOENT).
+        // Route through cmd.exe with separate argv elements so libuv quotes
+        // paths containing spaces itself. Do NOT pre-quote: libuv escaping
+        // combined with cmd's /s quote-stripping breaks the command line.
+        child = _spawn("cmd", ["/d", "/c", command, ...args], { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
+      } else {
+        child = _spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
+      }
+    } catch (e: unknown) {
+      const message: string = e instanceof Error ? e.message : String(e);
+      resolve({ stdout: "", stderr: `spawn failed: ${message}`, code: -1 });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     if (child.stdout) {
@@ -248,11 +264,7 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
 
   // Try winget install
   progress({ step: "installing-node", message: "Installing Node.js LTS via winget..." });
-  console.log("[DSH-INSTALL] Starting winget install OpenJS.NodeJS.LTS");
   const wingetResult = await runCommand("winget", ["install", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"]);
-  console.log("[DSH-INSTALL] winget exit code:", wingetResult.code);
-  console.log("[DSH-INSTALL] winget stdout:", wingetResult.stdout.substring(0, 500));
-  console.log("[DSH-INSTALL] winget stderr:", wingetResult.stderr.substring(0, 500));
 
   // Regardless of winget exit code, try to find node via PowerShell
   // (winget may report failure but node may still be installed)
@@ -270,27 +282,23 @@ async function downloadAndInstallNodeWindows(progress: ProgressCallback): Promis
 function findNodeViaPowerShell(): { node: string; npm: string } | null {
   // Use PowerShell to find node — reads fresh system env, not Obsidian's stale process env
   try {
-    console.log("[DSH-INSTALL] Trying PowerShell Get-Command node");
     const psResult: string = _execFileSync("cmd", ["/c", "powershell", "-NoProfile", "-Command", "(Get-Command node -ErrorAction SilentlyContinue).Source"], { stdio: ["pipe", "pipe", "pipe"] });
     const nodePath: string = psResult.trim().split("\n")[0].trim();
-    console.log("[DSH-INSTALL] PowerShell found node at:", nodePath);
     if (nodePath && _existsSync(nodePath)) {
       const dir: string = _dirname(nodePath);
       const npmName: string = "npm.cmd";
       const npmPath: string = _join(dir, npmName);
       if (_existsSync(npmPath)) {
-        console.log("[DSH-INSTALL] Found npm at:", npmPath);
         return { node: nodePath, npm: npmPath };
       }
       // npm might be npm without .cmd
       const npmAlt: string = _join(dir, "npm");
       if (_existsSync(npmAlt)) {
-        console.log("[DSH-INSTALL] Found npm at:", npmAlt);
         return { node: nodePath, npm: npmAlt };
       }
     }
-  } catch (psErr: unknown) {
-    console.log("[DSH-INSTALL] PowerShell Get-Command failed:", (psErr as Error).message);
+  } catch {
+    // PowerShell couldn't find node
   }
   return null;
 }
@@ -409,6 +417,23 @@ async function installNode22Windows(progress: ProgressCallback): Promise<{ node:
   return nodeFound;
 }
 
+async function getNpmPrefix(npmPath: string, env: Record<string, string | undefined>): Promise<string | null> {
+  // Ask npm where its global prefix is. Falls back to the Windows default
+  // (%APPDATA%\npm) when npm itself cannot answer.
+  try {
+    const result = await runCommand(npmPath, ["config", "get", "prefix"], env);
+    const prefix: string = (result.stdout ?? "").trim().split("\n")[0].trim();
+    if (result.code === 0 && prefix) return prefix;
+  } catch {
+    // fall through to defaults below
+  }
+  if (_process.platform === "win32") {
+    const appData: string | undefined = _process.env.APPDATA;
+    if (appData) return _join(appData, "npm");
+  }
+  return null;
+}
+
 export async function installDsh(npmPath: string, progress: ProgressCallback): Promise<boolean> {
   progress({ step: "installing-dsh", message: "Installing dsh via npm..." });
   const nodeFound: { node: string; npm: string } | null = findNodeFromNvm() ?? findSystemNode();
@@ -417,6 +442,20 @@ export async function installDsh(npmPath: string, progress: ProgressCallback): P
     const binDir: string = nodeFound.node.substring(0, nodeFound.node.length - 5);
     const pathSeparator: string = _process.platform === "win32" ? ";" : ":";
     env.PATH = binDir + pathSeparator + (env.PATH ?? "");
+  }
+  if (_process.platform === "win32") {
+    // The default global prefix (%APPDATA%\npm) may not exist on a fresh
+    // machine, which breaks `npm install -g` and the later `where dsh`
+    // check. Create it upfront; if creation fails, let npm try on its own.
+    const prefix: string | null = await getNpmPrefix(npmPath, env);
+    if (prefix && !_existsSync(prefix)) {
+      progress({ step: "installing-dsh", message: `Creating npm global directory: ${prefix}` });
+      try {
+        _mkdirSync(prefix, { recursive: true });
+      } catch {
+        // npm may still succeed by creating the prefix itself
+      }
+    }
   }
   const result = await runCommand(npmPath, ["install", "-g", DSH_PACKAGE], env);
   if (result.code !== 0) {
@@ -440,18 +479,15 @@ export async function verifyDsh(progress: ProgressCallback): Promise<boolean> {
 
 export async function runFullInstall(progress: ProgressCallback): Promise<boolean> {
   const isWindows: boolean = _process.platform === "win32";
-  console.log("[DSH-INSTALL] runFullInstall started, isWindows:", isWindows);
 
   progress({ step: "checking", message: "Checking for existing dsh..." });
   if (checkDshInstalled()) {
-    console.log("[DSH-INSTALL] dsh already installed");
     progress({ step: "done", message: "dsh is already installed." });
     return true;
   }
 
   progress({ step: "checking", message: "Checking for Node.js >= 22..." });
   let nodeInfo: { node: string; npm: string } | null = findSystemNode();
-  console.log("[DSH-INSTALL] findSystemNode:", nodeInfo);
   if (nodeInfo && checkNodeVersion(nodeInfo.node)) {
     progress({ step: "checking", message: "Found Node.js >= 22, installing dsh..." });
   } else {

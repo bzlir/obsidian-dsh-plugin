@@ -53,8 +53,8 @@ Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsid
 ## How it works
 
 1. **Process resolution**: Scans common `node`/`dsh` install locations (nvm, Homebrew, Volta, asdf, fnm, `~/.local/bin`, `~/bin`, plus any user-added custom paths) to find a Node ≥ 22 and the dsh CLI, bypassing Obsidian's bundled Electron Node.
-2. **Boot readiness**: Waits in two phases — first for the TCP port to open, then for `POST /api/session.list` to return a valid RPC response — so the iframe loads only after the dsh API gateway is live.
-3. **Workspace registration**: Calls `POST /api/workspace.create` with the Vault path so dsh treats the Vault as its working directory.
+2. **Boot readiness**: Waits in four phases — TCP port open, launch token (`?token=`) on stdout, token→cookie exchange, then `POST /api/session/list` returning a valid RPC response — so the iframe loads only after the dsh API gateway is live.
+3. **Workspace registration**: Calls `POST /api/workspace/create` with the Vault path so dsh treats the Vault as its working directory.
 4. **Lifecycle**: On DSH View close or plugin unload, kills the dsh process tree (children first, root last). On the next Obsidian launch, any orphaned dsh processes from a crashed previous session are reaped before spawning a new one.
 
 ## Configuration
