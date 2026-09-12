@@ -53,8 +53,8 @@ npm run build
 ## 工作原理
 
 1. **进程解析**：扫描常见的 `node`/`dsh` 安装路径（nvm、Homebrew、Volta、asdf、fnm、`~/.local/bin`、`~/bin`，以及设置面板中用户添加的自定义路径），找到 Node ≥ 22 和 dsh CLI，绕过 Obsidian 内置 Electron 的旧版 Node。
-2. **启动就绪检测**：分两阶段等待 —— 先等 TCP 端口开放，再等 `POST /api/session.list` 返回有效 RPC 响应 —— 确保 iframe 在 dsh API 网关就绪后才加载。
-3. **工作区注册**：调用 `POST /api/workspace.create` 传入 Vault 路径，让 dsh 将 Vault 作为工作目录。
+2. **启动就绪检测**：分四阶段等待 —— TCP 端口开放、stdout 出现 launch token（`?token=`）、token 换 cookie、`POST /api/session/list` 返回有效 RPC 响应 —— 确保 iframe 在 dsh API 网关就绪后才加载。
+3. **工作区注册**：调用 `POST /api/workspace/create` 传入 Vault 路径，让 dsh 将 Vault 作为工作目录。
 4. **生命周期管理**：关闭 DSH View 或卸载插件时，杀死 dsh 进程树（先子进程后根进程）。下次打开 Obsidian 时，先清理上次崩溃遗留的孤儿 dsh 进程，再启动新进程。
 
 ## 配置
