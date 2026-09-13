@@ -14,7 +14,7 @@
 ## 前置要求
 
 - [Obsidian](https://obsidian.md/) 1.13.0 或更高版本（仅桌面端）。
-- [Node.js](https://nodejs.org/) 22 或更高版本（dsh 需要 `node:zlib.createZstdDecompress`）。
+- [Node.js](https://nodejs.org/) 22.20 或更高版本（dsh 0.1.5+ 使用 `import.meta.main`，需要 Node 22.20+；Node 22.17 会静默失败）。
 - 全局安装 [dsh](https://github.com/deepseek-ai/deepseek-harness)：
 
   ```bash
@@ -22,6 +22,17 @@
   ```
 
   插件会扫描 nvm、Homebrew、Volta、asdf、fnm、`~/.local/bin`、`~/bin` 的 bin 目录来定位 `dsh` 和兼容的 `node`，因此即使 Obsidian 内置 Electron 自带的 Node 版本较旧也能正常工作。也可在设置面板中添加自定义路径，或使用 **Search for dsh** 按钮自动检测。
+
+### dsh 版本兼容性
+
+插件同时支持新旧两种 dsh 协议版本：
+
+| dsh 版本 | 协议 | 说明 |
+|---------|------|------|
+| 0.1.5+ | BrowserAuth（token → cookie → proxy） | 推荐。完整的 auth proxy 解决跨站 iframe 问题。 |
+| 0.1.1–0.1.4 | 旧协议（无认证） | 支持。直接 HTTP 访问，无需 token/cookie/proxy。 |
+
+插件会自动检测当前 dsh 使用的协议版本——无需任何配置。
 
 ## 安装
 

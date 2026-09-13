@@ -14,7 +14,7 @@ Host [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) i
 ## Prerequisites
 
 - [Obsidian](https://obsidian.md/) 1.13.0 or later (desktop only).
-- [Node.js](https://nodejs.org/) 22 or later (dsh requires `node:zlib.createZstdDecompress`).
+- [Node.js](https://nodejs.org/) 22.20 or later (dsh 0.1.5+ uses `import.meta.main`, which requires Node 22.20+; Node 22.17 silently fails to start dsh).
 - [dsh](https://github.com/deepseek-ai/deepseek-harness) installed globally:
 
   ```bash
@@ -22,6 +22,17 @@ Host [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) i
   ```
 
   The plugin scans nvm, Homebrew, Volta, asdf, fnm, `~/.local/bin`, and `~/bin` directories to locate `dsh` and a compatible `node`, so it works even though Obsidian's bundled Electron ships an older Node. You can also add custom paths in the settings panel or use the **Search for dsh** button to auto-detect.
+
+### dsh version compatibility
+
+The plugin supports both old and new dsh protocol versions:
+
+| dsh version | Protocol | Notes |
+|-------------|----------|-------|
+| 0.1.5+ | BrowserAuth (token → cookie → proxy) | Recommended. Full auth proxy for cross-site iframe. |
+| 0.1.1–0.1.4 | Legacy (no auth) | Supported. Direct HTTP access, no token/cookie/proxy. |
+
+The plugin auto-detects which protocol the running dsh uses — no configuration needed.
 
 ## Installation
 
