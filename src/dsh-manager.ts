@@ -732,17 +732,13 @@ export class DshManager {
   }
 
   private forwardRequest(ireq: TypedProxyIncoming, ires: TypedProxyResponse, dshPort: number): void {
-    const headers: Record<string, string | string[] | undefined> = { ...ireq.headers };
-    headers.host = `127.0.0.1:${dshPort}`;
-    delete headers["connection"];
-    if (this.cookieHeader) headers.cookie = this.cookieHeader;
     const preq: TypedClientRequest = _httpRequest(
       {
         hostname: "127.0.0.1",
         port: dshPort,
         path: ireq.url ?? "/",
         method: ireq.method ?? "GET",
-        headers,
+        headers: this.proxyHeaders(ireq.headers, dshPort, true),
       },
       (pres: TypedIncomingMessage) => {
         ires.writeHead((pres.statusCode as number) ?? 502, pres.headers ?? {});
@@ -760,6 +756,26 @@ export class DshManager {
     ireq.pipe(preq);
   }
 
+  /**
+   * Build the header set forwarded to dsh: Host always points at dsh, the
+   * session cookie is attached server-side, and Origin (when the browser
+   * sent one) is realigned to dsh's authority. Without the Origin rewrite
+   * dsh's Host/Origin fence sees Origin=proxy vs Host=dsh and rejects every
+   * /api call and WebSocket upgrade with 403.
+   */
+  private proxyHeaders(
+    incoming: Record<string, string | string[] | undefined>,
+    dshPort: number,
+    stripConnection: boolean,
+  ): Record<string, string | string[] | undefined> {
+    const dshAuthority: string = `127.0.0.1:${dshPort}`;
+    const headers: Record<string, string | string[] | undefined> = { ...incoming };
+    headers.host = dshAuthority;
+    if (headers.origin !== undefined) headers.origin = `http://${dshAuthority}`;
+    if (stripConnection) delete headers["connection"];
+    if (this.cookieHeader) headers.cookie = this.cookieHeader;
+    return headers;
+  }
   private forwardUpgrade(
     ireq: TypedProxyIncoming,
     socket: TypedSocket,
@@ -771,15 +787,18 @@ export class DshManager {
       this.proxySockets.delete(socket);
     });
     const target: TypedSocket = _createConnection({ host: "127.0.0.1", port: dshPort }, () => {
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(ireq.headers)) {
+      const headers: Record<string, string | string[] | undefined> = this.proxyHeaders(
+        ireq.headers,
+        dshPort,
+        false,
+      );
+      const flat: Record<string, string> = {};
+      for (const [k, v] of Object.entries(headers)) {
         if (v === undefined) continue;
-        headers[k] = Array.isArray(v) ? v.join(", ") : v;
+        flat[k] = Array.isArray(v) ? v.join(", ") : v;
       }
-      headers.host = `127.0.0.1:${dshPort}`;
-      if (this.cookieHeader) headers.cookie = this.cookieHeader;
       const lines: string[] = [`${ireq.method ?? "GET"} ${ireq.url ?? "/"} HTTP/${ireq.httpVersion}`];
-      for (const [k, v] of Object.entries(headers)) lines.push(`${k}: ${v}`);
+      for (const [k, v] of Object.entries(flat)) lines.push(`${k}: ${v}`);
       target.write(lines.join("\r\n") + "\r\n\r\n");
       if (head && head.length > 0) target.write(head);
       socket.pipe(target);
