@@ -213,10 +213,23 @@ function checkNodeHasZstd(nodePath: string): boolean {
   }
 }
 
+function checkNodeVersion(nodePath: string, minMajor: number, minMinor: number = 0): boolean {
+  try {
+    const result: Uint8Array = _execFileSync(
+      nodePath,
+      ["-e", `process.exit(process.versions.node.split(".")[0] >= ${minMajor} && (process.versions.node.split(".")[0] > ${minMajor} || process.versions.node.split(".")[1] >= ${minMinor} ? 0 : 1)`],
+      { stdio: "pipe", timeout: 5000 }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveNodeFromDsh(dshAbs: string): string | null {
   const binDir: string = _dirname(dshAbs);
   const nodePath: string = _join(binDir, "node");
-  if (_existsSync(nodePath) && checkNodeHasZstd(nodePath)) {
+  if (_existsSync(nodePath) && checkNodeHasZstd(nodePath) && checkNodeVersion(nodePath, 22, 20)) {
     return nodePath;
   }
   return null;
@@ -270,7 +283,7 @@ async function resolveBin(customPaths: string[] = []): Promise<ResolvedBin | nul
   let nodePath: string | null = resolveNodeFromDsh(dshAbs);
   if (!nodePath) {
     const candidate: string | null = findInDirs("node", dirs);
-    if (candidate && checkNodeHasZstd(candidate)) {
+    if (candidate && checkNodeHasZstd(candidate) && checkNodeVersion(candidate, 22, 20)) {
       nodePath = candidate;
     }
   }
