@@ -743,18 +743,18 @@ export class DshManager {
     const proxyPort: number = await this.findFreePort();
     const server: TypedHttpServer = _createHttpServer();
     server.on("request", (...args: never[]) => {
-      const ireq: TypedProxyIncoming = args[0] as unknown as TypedProxyIncoming;
-      const ires: TypedProxyResponse = args[1] as unknown as TypedProxyResponse;
+      const ireq: TypedProxyIncoming = args[0];
+      const ires: TypedProxyResponse = args[1];
       this.forwardRequest(ireq, ires, dshPort);
     });
     server.on("upgrade", (...args: never[]) => {
-      const ireq: TypedProxyIncoming = args[0] as unknown as TypedProxyIncoming;
-      const socket: TypedSocket = args[1] as unknown as TypedSocket;
-      const head: Uint8Array = args[2] as unknown as Uint8Array;
+      const ireq: TypedProxyIncoming = args[0];
+      const socket: TypedSocket = args[1];
+      const head: Uint8Array = args[2];
       this.forwardUpgrade(ireq, socket, head, dshPort);
     });
     await new Promise<void>((resolve, reject) => {
-      server.on("error", (...args: never[]) => reject(args[0] as unknown as Error));
+      server.on("error", (...args: never[]) => reject(args[0]));
       server.listen(proxyPort, "127.0.0.1", () => resolve());
     });
     this.proxyServer = server;
