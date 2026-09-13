@@ -32,9 +32,9 @@ export class DshView extends ItemView {
     this.statusEl = this.contentEl.createDiv({ text: "Starting DSH...", cls: "dsh-status" });
 
     this.dsh.setOnUnexpectedExit((info) => {
-      this.showStatus(
-        `DSH process exited unexpectedly (code: ${info.code}, signal: ${info.signal}).\n${info.stderr}`
-      );
+      const msg = `DSH process exited unexpectedly (code: ${info.code}, signal: ${info.signal}).\n${info.stderr}`;
+      console.error(`[DSH] ${msg}`);
+      this.showStatus(msg);
       this.iframe?.remove();
       this.iframe = null;
     });
@@ -66,7 +66,9 @@ export class DshView extends ItemView {
         this.statusEl?.hide();
       });
     } catch (err: unknown) {
-      this.showStatus(`Failed to start DSH: ${(err as Error).message}`);
+      const msg = `Failed to start DSH: ${(err as Error).message}`;
+      console.error(`[DSH] ${msg}`);
+      this.showStatus(msg);
     }
   }
 

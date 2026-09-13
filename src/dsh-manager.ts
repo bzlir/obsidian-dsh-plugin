@@ -124,6 +124,12 @@ const SESSION_LIST_PATH = "/api/session/list";
 const SESSION_LIST_METHOD = "session/list";
 const WORKSPACE_CREATE_PATH = "/api/workspace/create";
 const WORKSPACE_CREATE_METHOD = "workspace/create";
+// Legacy-protocol endpoints (pre-BrowserAuth dsh, e.g. 0.1.1): dotted method
+// names, raw payloads, no token or cookie.
+const LEGACY_SESSION_LIST_PATH = "/api/session.list";
+const LEGACY_SESSION_LIST_METHOD = "session.list";
+const LEGACY_WORKSPACE_CREATE_PATH = "/api/workspace.create";
+const LEGACY_WORKSPACE_CREATE_METHOD = "workspace.create";
 
 interface ResolvedBin {
   node: string;
@@ -294,10 +300,16 @@ export function searchForDsh(): Promise<string[]> {
       return;
     }
     const home: string = _homedir();
+    // Match regular files and symlinks (e.g. /usr/local/bin/dsh -> nvm).
+    // Depth 7 covers nvm's <home>/.nvm/versions/node/<ver>/bin/dsh (depth 6).
     const roots: string[] = [home, "/usr/local", "/opt/homebrew", "/usr/bin", "/opt"];
-    const child: TypedChildProcess = _spawn("find", [...roots, "-name", "dsh", "-type", "f", "-maxdepth", "5"], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child: TypedChildProcess = _spawn(
+      "find",
+      [...roots, "-name", "dsh", "(", "-type", "f", "-o", "-type", "l", ")", "-maxdepth", "7"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     let out: string = "";
     const stdout: TypedStream | null = child.stdout;
     if (stdout) {
@@ -361,6 +373,7 @@ export class DshManager {
   private stdoutLines: string[] = [];
   private authToken: string | null = null;
   private cookieHeader: string | null = null;
+  private legacyMode = false;
   private proxyServer: TypedHttpServer | null = null;
   private proxyPort: number | null = null;
   private proxySockets: Set<unknown> = new Set();
@@ -405,6 +418,7 @@ export class DshManager {
     this.stdoutLines = [];
     this.authToken = null;
     this.cookieHeader = null;
+    this.legacyMode = false;
     this.proxyServer = null;
     this.proxyPort = null;
     this.proxySockets.clear();
@@ -491,23 +505,36 @@ export class DshManager {
 
     await this.waitForReady(port);
     await this.ensureWorkspace(port, vaultPath);
-    await this.startProxy(port);
+    // Legacy dsh has no browser auth: no cookie, no proxy needed.
+    if (!this.legacyMode) {
+      await this.startProxy(port);
+    }
     return port;
   }
 
   private async ensureWorkspace(port: number, vaultPath: string): Promise<void> {
-    const body: string = JSON.stringify({
-      type: "client-request",
-      rpcId: "workspace-init",
-      method: WORKSPACE_CREATE_METHOD,
-      payload: { args: { request: { path: vaultPath } } },
-    });
+    const legacy: boolean = this.legacyMode;
+    const body: string = JSON.stringify(
+      legacy
+        ? {
+            type: "client-request",
+            rpcId: "workspace-init",
+            method: LEGACY_WORKSPACE_CREATE_METHOD,
+            payload: { path: vaultPath },
+          }
+        : {
+            type: "client-request",
+            rpcId: "workspace-init",
+            method: WORKSPACE_CREATE_METHOD,
+            payload: { args: { request: { path: vaultPath } } },
+          },
+    );
     try {
       const res: HttpResult = await this.httpText(
         {
           hostname: "127.0.0.1",
           port,
-          path: WORKSPACE_CREATE_PATH,
+          path: legacy ? LEGACY_WORKSPACE_CREATE_PATH : WORKSPACE_CREATE_PATH,
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -598,7 +625,9 @@ export class DshManager {
 
   /** Browser URL carrying the launch token (null until boot prints it). */
   getAuthedUrl(): string | null {
-    if (this.port == null || !this.authToken) return null;
+    if (this.port == null) return null;
+    if (this.legacyMode) return `http://127.0.0.1:${this.port}`;
+    if (!this.authToken) return null;
     return `http://127.0.0.1:${this.port}/?token=${this.authToken}`;
   }
 
@@ -606,8 +635,10 @@ export class DshManager {
    * Same-origin-safe URL for the embedded iframe: the plugin's local proxy
    * attaches the session cookie server-side, so the cross-site
    * SameSite=Strict cookie policy never blocks the iframe.
+   * Null in legacy mode (no auth, no proxy).
    */
   getProxyUrl(): string | null {
+    if (this.legacyMode) return null;
     if (this.proxyPort == null) return null;
     const suffix: string = this.authToken ? `?token=${this.authToken}` : "";
     return `http://127.0.0.1:${this.proxyPort}/${suffix}`;
@@ -712,18 +743,18 @@ export class DshManager {
     const proxyPort: number = await this.findFreePort();
     const server: TypedHttpServer = _createHttpServer();
     server.on("request", (...args: never[]) => {
-      const ireq: TypedProxyIncoming = args[0] as unknown as TypedProxyIncoming;
-      const ires: TypedProxyResponse = args[1] as unknown as TypedProxyResponse;
+      const ireq: TypedProxyIncoming = args[0];
+      const ires: TypedProxyResponse = args[1];
       this.forwardRequest(ireq, ires, dshPort);
     });
     server.on("upgrade", (...args: never[]) => {
-      const ireq: TypedProxyIncoming = args[0] as unknown as TypedProxyIncoming;
-      const socket: TypedSocket = args[1] as unknown as TypedSocket;
-      const head: Uint8Array = args[2] as unknown as Uint8Array;
+      const ireq: TypedProxyIncoming = args[0];
+      const socket: TypedSocket = args[1];
+      const head: Uint8Array = args[2];
       this.forwardUpgrade(ireq, socket, head, dshPort);
     });
     await new Promise<void>((resolve, reject) => {
-      server.on("error", (...args: never[]) => reject(args[0] as unknown as Error));
+      server.on("error", (...args: never[]) => reject(args[0]));
       server.listen(proxyPort, "127.0.0.1", () => resolve());
     });
     this.proxyServer = server;
@@ -873,7 +904,9 @@ export class DshManager {
       if (ready) break;
       await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
-    // Phase 2: launch token printed on stdout (new-protocol browser auth).
+    // Phase 2: protocol detection. New dsh prints a launch token (?token=)
+    // on stdout; legacy dsh (no browser auth) answers the old dotted probe.
+    // Whichever responds first selects the protocol for this session.
     while (Date.now() < deadline) {
       if (this.process === null) {
         throw new Error(
@@ -881,17 +914,23 @@ export class DshManager {
         );
       }
       if (this.authToken) break;
+      if (await this.checkLegacyApiReady(port)) {
+        this.legacyMode = true;
+        break;
+      }
       await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
-    if (!this.authToken) {
+    if (!this.authToken && !this.legacyMode) {
       throw new Error(
         `DSH did not print a launch token (?token=) within ${STARTUP_TIMEOUT_MS / 1000}s. Is dsh up to date?\nStdout:\n${this.stdoutLines.join("\n")}`
       );
     }
-    // Phase 3: exchange the token for a session cookie.
-    const authed: boolean = await this.exchangeTokenForCookie(port, this.authToken);
-    if (!authed) {
-      throw new Error("DSH token exchange failed (no session cookie issued).");
+    // Phase 3: exchange the token for a session cookie (new protocol only).
+    if (!this.legacyMode && this.authToken) {
+      const authed: boolean = await this.exchangeTokenForCookie(port, this.authToken);
+      if (!authed) {
+        throw new Error("DSH token exchange failed (no session cookie issued).");
+      }
     }
     // Phase 4: API probe.
     while (Date.now() < deadline) {
@@ -900,11 +939,42 @@ export class DshManager {
           `DSH process exited before API became ready.\nStderr:\n${this.stderrLines.join("\n")}`
         );
       }
-      const ready: boolean = await this.checkApiReady(port);
+      const ready: boolean = this.legacyMode
+        ? await this.checkLegacyApiReady(port)
+        : await this.checkApiReady(port);
       if (ready) return;
       await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
     }
     throw new Error(`DSH API did not become ready within ${STARTUP_TIMEOUT_MS / 1000}s`);
+  }
+
+  /** Legacy-protocol probe: dotted endpoint, raw payload, no cookie. */
+  private async checkLegacyApiReady(port: number): Promise<boolean> {
+    const body: string = JSON.stringify({
+      type: "client-request",
+      rpcId: "legacy-probe",
+      method: LEGACY_SESSION_LIST_METHOD,
+      payload: { cursor: null, limit: 1 },
+    });
+    try {
+      const res: HttpResult = await this.httpText(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: LEGACY_SESSION_LIST_PATH,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(_byteLength(body)),
+          },
+          timeout: 1500,
+        },
+        body,
+      );
+      return res.statusCode === 200 && res.body.includes("server-response");
+    } catch {
+      return false;
+    }
   }
 
   private checkPort(port: number): Promise<boolean> {
