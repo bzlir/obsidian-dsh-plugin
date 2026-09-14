@@ -32,7 +32,7 @@ export class DshView extends ItemView {
     this.statusEl = this.contentEl.createDiv({ text: "Starting DSH...", cls: "dsh-status" });
 
     this.dsh.setOnUnexpectedExit((info) => {
-      const msg = `DSH process exited unexpectedly (code: ${info.code}, signal: ${info.signal}).\n${info.stderr}`;
+      const msg = `[v0.6.2-debug2] DSH exited (code: ${info.code}, signal: ${info.signal}).\nNode: ${this.dsh.getResolvedNode()}\nDshScript: ${this.dsh.getResolvedDshScript()}\nstderr: [${info.stderr}]\nstdout: [${this.dsh.getStdoutLog()}]`;
       console.error(`[DSH] ${msg}`);
       this.showStatus(msg);
       this.iframe?.remove();
@@ -67,8 +67,13 @@ export class DshView extends ItemView {
       });
     } catch (err: unknown) {
       const msg = `Failed to start DSH: ${(err as Error).message}`;
-      console.error(`[DSH] ${msg}`);
-      this.showStatus(msg);
+      // Don't overwrite the detailed exit message from onUnexpectedExit
+      if (this.statusEl && this.statusEl.textContent && this.statusEl.textContent.includes("exited unexpectedly")) {
+        // Exit handler already showed details — just log
+      } else {
+        console.error(`[DSH] ${msg}`);
+        this.showStatus(msg);
+      }
     }
   }
 

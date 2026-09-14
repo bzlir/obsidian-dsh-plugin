@@ -196,18 +196,36 @@ function augmentedEnv(customPaths: string[] = []): Record<string, string | undef
   }
   const pathValue: string = [...prepend, ...baseParts].join(sep);
   const env: Record<string, string | undefined> = { ..._process.env, PATH: pathValue };
+  // Remove ALL Electron-specific env vars that interfere with spawned Node.js.
+  // ELECTRON_RUN_AS_NODE forces the spawned process into Electron's Node mode,
+  // which breaks import.meta.main and causes dsh 0.1.5 to silently exit.
+  const electronVars: string[] = [
+    "ELECTRON_RUN_AS_NODE",
+    "ELECTRON_NO_ASAR",
+    "ELECTRON_OVERRIDE_DIST_PATH",
+  ];
+  for (const key of electronVars) {
+    delete env[key];
+  }
+  return env;
+}
+
+function cleanChildEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ..._process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.ELECTRON_NO_ASAR;
+  delete env.ELECTRON_OVERRIDE_DIST_PATH;
   return env;
 }
 
 function checkNodeHasZstd(nodePath: string): boolean {
   try {
-    const result: Uint8Array = _execFileSync(
+    _execFileSync(
       nodePath,
       ["-e", "process.exit(typeof require('zlib').createZstdDecompress === 'function' ? 0 : 1)"],
-      { stdio: "pipe", timeout: 5000 }
+      { stdio: "pipe", timeout: 5000, env: cleanChildEnv() }
     );
-    const output: string = result.toString();
-    return output !== undefined;
+    return true;
   } catch {
     return false;
   }
@@ -215,10 +233,10 @@ function checkNodeHasZstd(nodePath: string): boolean {
 
 function checkNodeVersion(nodePath: string, minMajor: number, minMinor: number = 0): boolean {
   try {
-    const result: Uint8Array = _execFileSync(
+    _execFileSync(
       nodePath,
-      ["-e", `process.exit(process.versions.node.split(".")[0] >= ${minMajor} && (process.versions.node.split(".")[0] > ${minMajor} || process.versions.node.split(".")[1] >= ${minMinor} ? 0 : 1)`],
-      { stdio: "pipe", timeout: 5000 }
+      ["--input-type=module", "-e", "process.exit(import.meta.main !== undefined ? 0 : 1)"],
+      { stdio: "pipe", timeout: 5000, env: cleanChildEnv() }
     );
     return true;
   } catch {
@@ -437,10 +455,71 @@ export class DshManager {
     this.proxySockets.clear();
 
     const resolved: ResolvedBin = this.resolved;
+
+    // Verify node version right before spawn — if the resolved node doesn't
+    // support import.meta.main (Node < 22.20), dsh 0.1.5 will silently exit.
+    try {
+      _execFileSync(resolved.node, ["--input-type=module", "-e", "process.exit(import.meta.main !== undefined ? 0 : 1)"], { stdio: "pipe", timeout: 5000, env: cleanChildEnv() });
+    } catch {
+      // import.meta.main not supported — try to find a newer node
+      const dirs: string[] = candidateBinDirs(this.customPaths);
+      let betterNode: string | null = null;
+      for (const d of dirs) {
+        const candidate: string = _join(d, "node");
+        if (!_existsSync(candidate)) continue;
+        try {
+          _execFileSync(candidate, ["--input-type=module", "-e", "process.exit(import.meta.main !== undefined ? 0 : 1)"], { stdio: "pipe", timeout: 5000, env: cleanChildEnv() });
+          betterNode = candidate;
+          break;
+        } catch {
+          // this node also doesn't support import.meta.main
+        }
+      }
+      if (betterNode) {
+        this.resolved = { node: betterNode, dshScript: resolved.dshScript };
+      }
+    }
+
+    const finalResolved: ResolvedBin = this.resolved;
+
+    // Build env: strip Electron vars that break spawned Node.js.
+    let spawnEnv: Record<string, string | undefined> = augmentedEnv(this.customPaths);
+
+    // Pre-flight: if import.meta.main fails with augmented env, try a minimal
+    // clean env (only PATH + HOME + essential vars).
+    try {
+      _execFileSync(
+        finalResolved.node,
+        ["--input-type=module", "-e", "process.exit(import.meta.main ? 0 : 1)"],
+        { stdio: "pipe", timeout: 5000, env: spawnEnv }
+      );
+    } catch {
+      // augmented env breaks import.meta.main — try clean env
+      const cleanEnv: Record<string, string | undefined> = {
+        PATH: spawnEnv.PATH,
+        HOME: spawnEnv.HOME,
+        USER: spawnEnv.USER,
+        SHELL: spawnEnv.SHELL,
+        LANG: spawnEnv.LANG,
+        TERM: spawnEnv.TERM,
+        DSH_HOME: spawnEnv.DSH_HOME,
+      };
+      try {
+        _execFileSync(
+          finalResolved.node,
+          ["--input-type=module", "-e", "process.exit(import.meta.main ? 0 : 1)"],
+          { stdio: "pipe", timeout: 5000, env: cleanEnv }
+        );
+        spawnEnv = cleanEnv;
+      } catch {
+        // Still broken — let dsh try anyway
+      }
+    }
+
     const child: TypedChildProcess = _spawn(
-      resolved.node,
-      [resolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
-      { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(this.customPaths) }
+      finalResolved.node,
+      [finalResolved.dshScript, "web", "--port", String(port), "--host", "127.0.0.1", "--no-open"],
+      { cwd: vaultPath, stdio: ["pipe", "pipe", "pipe"], env: spawnEnv }
     );
     this.process = child;
 
@@ -499,10 +578,12 @@ export class DshManager {
       const wasRunning: boolean = this.process !== null;
       this.process = null;
       if (wasRunning && this.onUnexpectedExit) {
+        const resolvedInfo: string = this.resolved ? ` [node=${this.resolved.node}, dshScript=${this.resolved.dshScript}]` : "";
+        const stdoutInfo: string = this.stdoutLines.length > 0 ? `\nStdout:\n${this.stdoutLines.join("\n")}` : "";
         const info: ExitInfo = {
           code,
           signal,
-          stderr: this.stderrLines.join("\n"),
+          stderr: `${this.stderrLines.join("\n")}${stdoutInfo}${resolvedInfo}`,
         };
         this.onUnexpectedExit(info);
       }
@@ -629,6 +710,18 @@ export class DshManager {
 
   getPort(): number | null {
     return this.port;
+  }
+
+  getStdoutLog(): string {
+    return this.stdoutLines.join("\n");
+  }
+
+  getResolvedNode(): string {
+    return this.resolved?.node ?? "unknown";
+  }
+
+  getResolvedDshScript(): string {
+    return this.resolved?.dshScript ?? "unknown";
   }
 
   /** Launch token printed by `dsh web` on stdout (null until boot prints it). */
@@ -909,9 +1002,9 @@ export class DshManager {
     // Phase 1: TCP port open.
     while (Date.now() < deadline) {
       if (this.process === null) {
-        throw new Error(
-          `DSH process exited before becoming ready.\nStderr:\n${this.stderrLines.join("\n")}`
-        );
+        // Process exited — onUnexpectedExit already fired with details.
+        // Don't overwrite with a generic message.
+        throw new Error("DSH process exited during startup. Check the error message above.");
       }
       const ready: boolean = await this.checkPort(port);
       if (ready) break;
@@ -922,9 +1015,7 @@ export class DshManager {
     // Whichever responds first selects the protocol for this session.
     while (Date.now() < deadline) {
       if (this.process === null) {
-        throw new Error(
-          `DSH process exited before printing its launch token.\nStderr:\n${this.stderrLines.join("\n")}`
-        );
+        throw new Error("DSH process exited during startup. Check the error message above.");
       }
       if (this.authToken) break;
       if (await this.checkLegacyApiReady(port)) {
@@ -948,9 +1039,7 @@ export class DshManager {
     // Phase 4: API probe.
     while (Date.now() < deadline) {
       if (this.process === null) {
-        throw new Error(
-          `DSH process exited before API became ready.\nStderr:\n${this.stderrLines.join("\n")}`
-        );
+        throw new Error("DSH process exited during startup. Check the error message above.");
       }
       const ready: boolean = this.legacyMode
         ? await this.checkLegacyApiReady(port)
