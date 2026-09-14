@@ -860,7 +860,7 @@ export class DshManager {
       this.forwardUpgrade(ireq, socket, head, dshPort);
     });
     await new Promise<void>((resolve, reject) => {
-      server.on("error", (...args: never[]) => reject(args[0]));
+      server.on("error", (...args: never[]) => reject(new Error(String(args[0]))));
       server.listen(proxyPort, "127.0.0.1", () => resolve());
     });
     this.proxyServer = server;
