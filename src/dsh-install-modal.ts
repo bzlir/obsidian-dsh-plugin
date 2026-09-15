@@ -1,5 +1,5 @@
-import { App, Modal, Setting, ButtonComponent, TextComponent, Notice } from "obsidian";
-import { runFullInstall, runInstallWithNode, type InstallProgress, type ProgressCallback } from "./dsh-installer";
+import { App, Modal, Setting, ButtonComponent, TextComponent, ToggleComponent, Notice } from "obsidian";
+import { runFullInstall, runInstallWithNode, DSH_MARKET_PACKAGE, type InstallProgress, type ProgressCallback } from "./dsh-installer";
 import type DshPlugin from "./main";
 
 type ModalMode = "auto" | "manual" | "installing";
@@ -10,11 +10,13 @@ export class DshInstallModal extends Modal {
   private mode: ModalMode = "auto";
   private progressEl: HTMLElement | null = null;
   private manualNodePath = "";
+  private installDshMarket = true;
 
   constructor(app: App, plugin: DshPlugin, onRetry: () => void) {
     super(app);
     this.plugin = plugin;
     this.onRetry = onRetry;
+    this.installDshMarket = plugin.settings.installDshMarket;
   }
 
   onOpen(): void {
@@ -31,6 +33,8 @@ export class DshInstallModal extends Modal {
     new Setting(contentEl)
       .setName("DeepSeek Harness (dsh) is required")
       .setDesc("dsh is not installed on your machine. Click Install to automatically install nvm, Node.js 22, and dsh — no terminal needed.");
+
+    this.addMarketToggle(contentEl);
 
     this.progressEl = contentEl.createDiv({ cls: "dsh-install-progress" });
     this.progressEl.hide();
@@ -51,6 +55,29 @@ export class DshInstallModal extends Modal {
           this.close();
         });
       });
+  }
+
+  /**
+   * The "install dsh-market" checkbox, shared by auto and manual flows.
+   * Persisted to plugin settings so the choice sticks across sessions, and
+   * extensible to future recommended plugins via the same install path.
+   */
+  private addMarketToggle(container: HTMLElement): void {
+    new Setting(container)
+      .setName("Install dsh-market plugin")
+      .setDesc("Recommended: the dsh plugin marketplace, browsable inside the web UI. Future recommended plugins install through the same mechanism.")
+      .addToggle((toggle: ToggleComponent) => {
+        toggle.setValue(this.installDshMarket).onChange((value: boolean) => {
+          this.installDshMarket = value;
+          this.plugin.settings.installDshMarket = value;
+          void this.plugin.saveSettings();
+        });
+      });
+  }
+
+  /** The plugin list carried into the installer for this modal's choice. */
+  private requestedPlugins(): string[] {
+    return this.installDshMarket ? [DSH_MARKET_PACKAGE] : [];
   }
 
   private renderManualMode(): void {
@@ -81,6 +108,8 @@ export class DshInstallModal extends Modal {
           this.manualNodePath = text.getValue().trim();
         });
       });
+
+    this.addMarketToggle(contentEl);
 
     this.progressEl = contentEl.createDiv({ cls: "dsh-install-progress" });
     this.progressEl.hide();
@@ -124,7 +153,7 @@ export class DshInstallModal extends Modal {
     };
 
     try {
-      const success: boolean = await runFullInstall(callback);
+      const success: boolean = await runFullInstall(callback, this.requestedPlugins());
       if (success) {
         new Notice("dsh installed successfully!");
         this.close();
@@ -162,7 +191,7 @@ export class DshInstallModal extends Modal {
           void this.plugin.saveSettings();
           this.plugin.applyCustomPaths();
         }
-      });
+      }, this.requestedPlugins());
       if (success) {
         new Notice("dsh installed successfully!");
         this.close();
@@ -201,6 +230,7 @@ export class DshInstallModal extends Modal {
       "installing-nvm": "NVM",
       "installing-node": "NODE",
       "installing-dsh": "DSH",
+      "installing-plugins": "PLUGINS",
       verifying: "VERIFY",
       done: "OK",
       error: "FAIL",

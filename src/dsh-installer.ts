@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -7,6 +7,8 @@ const _spawn = spawn as unknown as (command: string, args: string[], options: ob
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => string;
 const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _mkdirSync = mkdirSync as unknown as (path: string, options: { recursive: boolean }) => void;
+const _readFileSync = readFileSync as unknown as (path: string, encoding: string) => string;
+const _writeFileSync = writeFileSync as unknown as (path: string, data: string) => void;
 const _join = join as unknown as (...paths: string[]) => string;
 const _dirname = dirname as unknown as (path: string) => string;
 const _homedir = homedir as unknown as () => string;
@@ -36,8 +38,35 @@ const NVM_DIR = _join(_homedir(), ".nvm");
 const NVM_SH = _join(NVM_DIR, "nvm.sh");
 const NVM_NODE_ROOT = _join(NVM_DIR, "versions", "node");
 const DSH_PACKAGE = "@deepseek-ai/dsh";
+export const DSH_MARKET_PACKAGE = "dshmarket";
+const DEFAULT_DSH_HOME = _join(_homedir(), ".dsh");
+// Must mirror @deepseek-ai/dsh-app-boot's shipped web template (PROFILE_TEMPLATES).
+const WEB_PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+const PROFILE_PATCH_TEMPLATE = `# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; \`!!js\` expressions allowed).
+[]
+`;
+const PROFILE_PNPM_WORKSPACE = `packages:
+  - .
 
-export type InstallStep = "idle" | "checking" | "installing-nvm" | "installing-node" | "installing-dsh" | "verifying" | "done" | "error";
+nodeLinker: hoisted
+autoInstallPeers: false
+`;
+
+interface ProfileManifest {
+  name?: string;
+  private?: boolean;
+  dependencies?: Record<string, string>;
+  dsh?: {
+    profile?: {
+      bundles?: string[];
+      patchReload?: string;
+    };
+  };
+}
+
+export type InstallStep = "idle" | "checking" | "installing-nvm" | "installing-node" | "installing-dsh" | "installing-plugins" | "verifying" | "done" | "error";
 
 export interface InstallProgress {
   step: InstallStep;
@@ -146,18 +175,19 @@ export function checkDshInstalled(): boolean {
   }
 }
 
-function runCommand(command: string, args: string[], env?: Record<string, string | undefined>): Promise<{ stdout: string; stderr: string; code: number | null }> {
+function runCommand(command: string, args: string[], env?: Record<string, string | undefined>, cwd?: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
     let child: TypedChildProcess;
+    const spawnOptions: object = { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env, ...(cwd ? { cwd } : {}) };
     try {
       if (_process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
         // Node cannot spawn .cmd/.bat directly (throws EINVAL/ENOENT).
         // Route through cmd.exe with separate argv elements so libuv quotes
         // paths containing spaces itself. Do NOT pre-quote: libuv escaping
         // combined with cmd's /s quote-stripping breaks the command line.
-        child = _spawn("cmd", ["/d", "/c", command, ...args], { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
+        child = _spawn("cmd", ["/d", "/c", command, ...args], spawnOptions);
       } else {
-        child = _spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env: env ?? _process.env });
+        child = _spawn(command, args, spawnOptions);
       }
     } catch (e: unknown) {
       const message: string = e instanceof Error ? e.message : String(e);
@@ -473,16 +503,169 @@ export async function verifyDsh(progress: ProgressCallback): Promise<boolean> {
     progress({ step: "error", message: "dsh not found after installation." });
     return false;
   }
-  progress({ step: "done", message: "dsh is ready!" });
   return true;
 }
 
-export async function runFullInstall(progress: ProgressCallback): Promise<boolean> {
+/** Final success line, reflecting whether recommended plugins were requested. */
+function finishInstall(progress: ProgressCallback, plugins: string[]): void {
+  const message: string = plugins.length > 0 ? "dsh and the requested plugin(s) are ready!" : "dsh is ready!";
+  progress({ step: "done", message });
+}
+
+function resolveDshHome(): string {
+  const fromEnv: string | undefined = _process.env.DSH_HOME;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
+  return DEFAULT_DSH_HOME;
+}
+
+/**
+ * Build the child env used for npm/pnpm runs: prepend the resolved node's
+ * bin dir so package-manager shims resolve even with Obsidian's stale PATH.
+ */
+function buildPackageManagerEnv(npmPath: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ..._process.env };
+  const nodeFound: { node: string; npm: string } | null = findNodeFromNvm() ?? findSystemNode();
+  if (nodeFound) {
+    const binDir: string = nodeFound.node.substring(0, nodeFound.node.length - 5);
+    const pathSeparator: string = _process.platform === "win32" ? ";" : ":";
+    env.PATH = binDir + pathSeparator + (env.PATH ?? "");
+  }
+  // npm lives next to node; make sure its directory is on PATH too.
+  const npmDir: string = _dirname(npmPath);
+  const pathSeparator: string = _process.platform === "win32" ? ";" : ":";
+  if (!env.PATH?.includes(npmDir)) {
+    env.PATH = npmDir + pathSeparator + (env.PATH ?? "");
+  }
+  return env;
+}
+
+/**
+ * Replicate @deepseek-ai/dsh-app-boot's initProfile for the web profile:
+ * create the manifest, empty user patch layer, and pnpm settings when the
+ * profile directory does not exist yet. Existing files are never touched,
+ * matching dsh's own no-clobber initialization.
+ */
+function initWebProfileDir(dir: string): void {
+  _mkdirSync(dir, { recursive: true });
+  const manifestPath: string = _join(dir, "package.json");
+  if (!_existsSync(manifestPath)) {
+    const manifest: ProfileManifest = {
+      name: "dsh-profile-web",
+      private: true,
+      dependencies: {},
+      dsh: { profile: { bundles: [...WEB_PROFILE_BUNDLES], patchReload: "live" } },
+    };
+    _writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  }
+  const patchPath: string = _join(dir, "cordis.patch.yml");
+  if (!_existsSync(patchPath)) {
+    _writeFileSync(patchPath, PROFILE_PATCH_TEMPLATE);
+  }
+  const workspacePath: string = _join(dir, "pnpm-workspace.yaml");
+  if (!_existsSync(workspacePath)) {
+    _writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE);
+  }
+}
+
+function findPnpm(env: Record<string, string | undefined>): Promise<string | null> {
+  const probe: string = _process.platform === "win32" ? "where" : "which";
+  return runCommand(probe, ["pnpm"], env).then((result) => {
+    if (result.code !== 0) return null;
+    const first: string = result.stdout.trim().split("\n")[0].trim();
+    return first || null;
+  });
+}
+
+/**
+ * Install community plugins into the dsh web profile (`~/.dsh/profiles/web`).
+ *
+ * This is the plugin-side replacement for `dsh plugin --profile web add`,
+ * which requires pnpm on PATH. Here pnpm is used when present; otherwise the
+ * install falls back to `npm install --legacy-peer-deps` so peers
+ * (@deepseek-ai/cordis etc.) resolve through dsh's shared module fallback at
+ * ~/.dsh/profiles/node_modules instead of being duplicated into the profile.
+ *
+ * After the package-manager run, each plugin name is appended to the
+ * manifest's `dsh.profile.bundles` layer list so dsh boots its patch layer.
+ */
+export async function installProfilePlugins(npmPath: string, plugins: string[], progress: ProgressCallback): Promise<boolean> {
+  if (plugins.length === 0) return true;
+  const names: string = plugins.join(", ");
+  progress({ step: "installing-plugins", message: `Installing dsh plugin(s): ${names}...` });
+  const profileDir: string = _join(resolveDshHome(), "profiles", "web");
+  initWebProfileDir(profileDir);
+  const env: Record<string, string | undefined> = buildPackageManagerEnv(npmPath);
+
+  // Idempotency: skip a plugin already present in node_modules AND bundles.
+  let manifest: ProfileManifest = {};
+  try {
+    manifest = JSON.parse(_readFileSync(_join(profileDir, "package.json"), "utf8")) as ProfileManifest;
+  } catch {
+    manifest = {};
+  }
+  const bundles: string[] = manifest.dsh?.profile?.bundles ?? [];
+  const pending: string[] = plugins.filter((p: string) => !(bundles.includes(p) && _existsSync(_join(profileDir, "node_modules", p))));
+  if (pending.length === 0) {
+    progress({ step: "installing-plugins", message: `dsh plugin(s) already installed: ${names}.` });
+    return true;
+  }
+
+  const pnpmPath: string | null = await findPnpm(env);
+  let result: { stdout: string; stderr: string; code: number | null };
+  if (pnpmPath) {
+    progress({ step: "installing-plugins", message: `pnpm found at ${pnpmPath} — running pnpm add...` });
+    result = await runCommand(pnpmPath, ["add", ...pending], env, profileDir);
+  } else {
+    progress({ step: "installing-plugins", message: "pnpm not found — using npm (legacy peer resolution)..." });
+    result = await runCommand(npmPath, ["install", ...pending, "--legacy-peer-deps"], env, profileDir);
+  }
+  if (result.code !== 0) {
+    progress({ step: "error", message: `dsh plugin installation failed: ${result.stderr || result.stdout}` });
+    return false;
+  }
+
+  // Reconcile the bundle layer list against the installed state, mirroring
+  // dsh's own `dsh plugin` post-install step.
+  try {
+    const after: ProfileManifest = JSON.parse(_readFileSync(_join(profileDir, "package.json"), "utf8")) as ProfileManifest;
+    const profile = after.dsh?.profile ?? {};
+    const currentBundles: string[] = profile.bundles ?? [...WEB_PROFILE_BUNDLES];
+    const merged: string[] = [...currentBundles];
+    for (const p of pending) {
+      if (!merged.includes(p)) merged.push(p);
+    }
+    after.dsh = { profile: { bundles: merged, patchReload: profile.patchReload ?? "live" } };
+    _writeFileSync(_join(profileDir, "package.json"), JSON.stringify(after, null, 2) + "\n");
+  } catch (e: unknown) {
+    const message: string = e instanceof Error ? e.message : String(e);
+    progress({ step: "error", message: `dsh plugin manifest update failed: ${message}` });
+    return false;
+  }
+
+  for (const p of pending) {
+    if (!_existsSync(_join(profileDir, "node_modules", p))) {
+      progress({ step: "error", message: `dsh plugin ${p} not found in profile node_modules after install.` });
+      return false;
+    }
+  }
+  progress({ step: "installing-plugins", message: `dsh plugin(s) installed: ${names}.` });
+  return true;
+}
+
+export async function runFullInstall(progress: ProgressCallback, plugins: string[] = []): Promise<boolean> {
   const isWindows: boolean = _process.platform === "win32";
 
   progress({ step: "checking", message: "Checking for existing dsh..." });
   if (checkDshInstalled()) {
-    progress({ step: "done", message: "dsh is already installed." });
+    if (plugins.length > 0) {
+      const nodeInfo: { node: string; npm: string } | null = findSystemNode() ?? findNodeFromNvm();
+      if (nodeInfo) {
+        await installProfilePlugins(nodeInfo.npm, plugins, progress);
+      } else {
+        progress({ step: "error", message: "dsh is installed, but npm could not be located to install the requested plugin(s)." });
+      }
+    }
+    finishInstall(progress, plugins);
     return true;
   }
 
@@ -521,10 +704,22 @@ export async function runFullInstall(progress: ProgressCallback): Promise<boolea
   if (!dshOk) return false;
 
   const verified: boolean = await verifyDsh(progress);
-  return verified;
+  if (!verified) return false;
+
+  // Plugin install is non-fatal: dsh itself works without it, and the
+  // failure details were already surfaced via the progress callback.
+  if (plugins.length > 0) {
+    const pluginsOk: boolean = await installProfilePlugins(nodeInfo.npm, plugins, progress);
+    if (!pluginsOk) {
+      progress({ step: "done", message: "dsh is ready, but plugin installation failed — see the error above." });
+      return true;
+    }
+  }
+  finishInstall(progress, plugins);
+  return true;
 }
 
-export async function runInstallWithNode(nodePath: string, progress: ProgressCallback, onCustomPath?: (dir: string) => void): Promise<boolean> {
+export async function runInstallWithNode(nodePath: string, progress: ProgressCallback, onCustomPath?: (dir: string) => void, plugins: string[] = []): Promise<boolean> {
   // Validate the user-provided node path
   if (!_existsSync(nodePath)) {
     progress({ step: "error", message: `File not found: ${nodePath}` });
@@ -558,5 +753,16 @@ export async function runInstallWithNode(nodePath: string, progress: ProgressCal
   if (!dshOk) return false;
 
   const verified: boolean = await verifyDsh(progress);
-  return verified;
+  if (!verified) return false;
+
+  // Non-fatal, same policy as runFullInstall.
+  if (plugins.length > 0) {
+    const pluginsOk: boolean = await installProfilePlugins(npmPath, plugins, progress);
+    if (!pluginsOk) {
+      progress({ step: "done", message: "dsh is ready, but plugin installation failed — see the error above." });
+      return true;
+    }
+  }
+  finishInstall(progress, plugins);
+  return true;
 }
