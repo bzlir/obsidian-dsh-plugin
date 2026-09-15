@@ -2,7 +2,7 @@ import { spawn, execFileSync } from "child_process";
 import http from "http";
 import * as net from "net";
 import { homedir } from "os";
-import { existsSync, readdirSync, realpathSync } from "fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "fs";
 import { dirname, join } from "path";
 
 // Cast all Node.js imports to explicit function types.
@@ -14,6 +14,7 @@ const _dirname = dirname as unknown as (path: string) => string;
 const _readdirSync = readdirSync as unknown as (path: string) => string[];
 const _existsSync = existsSync as unknown as (path: string) => boolean;
 const _realpathSync = realpathSync as unknown as (path: string) => string;
+const _statSync = statSync as unknown as (path: string) => { isFile: () => boolean };
 const _execFileSync = execFileSync as unknown as (cmd: string, args: string[], options: object) => Uint8Array;
 const _Buffer = Buffer as unknown as { byteLength: (str: string) => number };
 const _byteLength = _Buffer.byteLength;
@@ -253,10 +254,24 @@ function resolveNodeFromDsh(dshAbs: string): string | null {
   return null;
 }
 
+/**
+ * Returns true if `path` exists and is a regular file, following symlinks.
+ * Rejects directories (e.g. npm package dirs whose basename happens to match
+ * the binary name) and broken symlinks. This is the gatekeeper that prevents
+ * a directory being fed to `node <path>` which would exit with MODULE_NOT_FOUND.
+ */
+function isRegularFile(path: string): boolean {
+  try {
+    return _statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function findInDirs(name: string, dirs: string[]): string | null {
   for (const d of dirs) {
     const p: string = _join(d, name);
-    if (_existsSync(p)) {
+    if (isRegularFile(p)) {
       return p;
     }
   }
@@ -319,7 +334,11 @@ export function searchForDsh(): Promise<string[]> {
       const out: string = raw.toString();
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
-        if (trimmed && trimmed.endsWith("/dsh")) {
+        // mdfind -name matches directories too (e.g. npm package dir
+        // .../@deepseek-ai/dsh whose basename is "dsh"). Only keep entries
+        // that resolve to a regular file so we never feed a directory to
+        // `node <dshScript>` (which would exit with MODULE_NOT_FOUND).
+        if (trimmed && trimmed.endsWith("/dsh") && isRegularFile(trimmed)) {
           results.add(trimmed);
         }
       }
@@ -353,7 +372,10 @@ export function searchForDsh(): Promise<string[]> {
     child.on("exit", () => {
       for (const line of out.split("\n")) {
         const trimmed: string = line.trim();
-        if (trimmed && trimmed.endsWith("/dsh")) {
+        // find uses `-type f -o -type l`, but a symlink can point to a
+        // directory (e.g. pnpm-style node_modules/@deepseek-ai/dsh -> pkg).
+        // isRegularFile follows the symlink and rejects directory targets.
+        if (trimmed && trimmed.endsWith("/dsh") && isRegularFile(trimmed)) {
           results.add(trimmed);
         }
       }
