@@ -55,6 +55,14 @@ Then copy `main.js`, `manifest.json`, and `styles.css` into your Vault's `.obsid
 2. Turn on **Community plugins** (if Safe Mode is on).
 3. Find **DSH Embedded** under *Installed plugins* and toggle it on.
 
+### Recommended plugins (dsh-market)
+
+When dsh is missing, the plugin opens a one-click install wizard (nvm → Node.js 22 → dsh). The wizard also presents a **recommended plugin list**:
+
+- **dsh-market** — a visual plugin marketplace inside the dsh web UI: browse, search, and one-click install community plugins. *(checked by default)*
+
+Toggle off any item you don't want before clicking **Install**; your choice is remembered for future runs. Recommended plugins are installed into the dsh web profile (`~/.dsh/profiles/web`) — via pnpm when available, otherwise npm — and registered as dsh bundle layers, the same way `dsh plugin --profile web add` would. Future recommended plugins will be offered through this same mechanism.
+
 ## Usage
 
 - Click the **dsh logo icon** in the left ribbon, or run **"Open DSH"** from the command palette (`Cmd+P`).
@@ -78,12 +86,13 @@ dsh configuration lives in `~/.dsh/` — see the [dsh documentation](https://git
 
 This plugin spawns a local `dsh web` subprocess and embeds its UI via an iframe. The following disclosures apply per the [Obsidian developer policies](https://docs.obsidian.md/community-directory/developer-policies):
 
-- **Network use**: The plugin starts a `dsh web` HTTP server on `127.0.0.1` (loopback only). The dsh subprocess itself may make outbound network calls to LLM provider APIs (e.g. DeepSeek, NIO, OpenAI-compatible endpoints) as configured in `~/.dsh/`. The plugin does not make any network requests directly.
+- **Network use**: The plugin starts a `dsh web` HTTP server on `127.0.0.1` (loopback only). The dsh subprocess itself may make outbound network calls to LLM provider APIs (e.g. DeepSeek, NIO, OpenAI-compatible endpoints) as configured in `~/.dsh/`. The plugin itself does not make any network requests directly, with one opt-in exception: when you accept a recommended plugin (e.g. dsh-market) during dsh setup, the plugin runs `npm`/`pnpm` inside the dsh profile directory, which downloads packages from the npm registry.
 - **Files outside the Vault**: To locate the `dsh` and `node` binaries, the plugin reads the following locations outside the Vault:
   - `~/.nvm/`, `~/.volta/`, `~/.asdf/`, `~/.fnm/`, `~/.local/bin/`, `~/bin/`
   - `/opt/homebrew/bin`, `/usr/local/bin`
   - Any user-added custom paths from the settings panel
   - When **Search for dsh** is used: macOS Spotlight index (`mdfind`) or a bounded `find` over common install roots
+  - When a recommended plugin install is opted in: `~/.dsh/profiles/web/` (writes the profile manifest, patch/workspace files, and `node_modules`)
 
   The plugin also reads `~/.dsh/.credentials.yaml` indirectly (dsh reads its own credentials file at startup). The plugin itself does not read, modify, or transmit credential files.
 - **No telemetry**: The plugin collects no data and sends no analytics.

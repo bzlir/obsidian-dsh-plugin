@@ -55,6 +55,14 @@ npm run build
 2. 开启 **社区插件**（如果当前是安全模式）。
 3. 在 *已安装插件* 中找到 **DSH Embedded**，打开开关。
 
+### 推荐插件（dsh-market）
+
+当检测不到 dsh 时，插件会打开一键安装向导（nvm → Node.js 22 → dsh）。向导中同时提供**推荐插件列表**：
+
+- **dsh-market** — dsh web UI 内的可视化插件市场：浏览、搜索、一键安装社区插件。（默认勾选）
+
+不需要的项目可在点击 **Install** 前关闭开关；选择会被记住，下次沿用。推荐插件会安装到 dsh web profile（`~/.dsh/profiles/web`）——优先使用 pnpm，否则回退 npm——并注册为 dsh bundle 层，效果与 `dsh plugin --profile web add` 一致。后续的推荐插件也将通过这一机制提供和安装。
+
 ## 使用
 
 - 点击左侧栏的 **dsh 图标**，或在命令面板（`Cmd+P`）中执行 **"Open DSH"**。
@@ -78,12 +86,13 @@ dsh 配置位于 `~/.dsh/`，请参考 [dsh 文档](https://github.com/deepseek-
 
 本插件启动本地 `dsh web` 子进程并通过 iframe 嵌入其 UI。根据 [Obsidian 开发者政策](https://docs.obsidian.md/community-directory/developer-policies)，披露如下：
 
-- **网络使用**：插件在 `127.0.0.1`（仅本地回环）启动 `dsh web` HTTP 服务器。dsh 子进程本身可能会向 LLM 服务商 API（如 DeepSeek、NIO、OpenAI 兼容端点）发起外部网络请求，具体由 `~/.dsh/` 中的配置决定。插件本身不直接发起任何网络请求。
+- **网络使用**：插件在 `127.0.0.1`（仅本地回环）启动 `dsh web` HTTP 服务器。dsh 子进程本身可能会向 LLM 服务商 API（如 DeepSeek、NIO、OpenAI 兼容端点）发起外部网络请求，具体由 `~/.dsh/` 中的配置决定。插件本身不直接发起任何网络请求，唯一的可选项例外：当你在 dsh 安装向导中勾选了推荐插件（如 dsh-market）时，插件会在 dsh profile 目录内运行 `npm`/`pnpm`，从 npm registry 下载软件包。
 - **访问 Vault 外文件**：为定位 `dsh` 和 `node` 二进制，插件会读取以下 Vault 外路径：
   - `~/.nvm/`、`~/.volta/`、`~/.asdf/`、`~/.fnm/`、`~/.local/bin/`、`~/bin/`
   - `/opt/homebrew/bin`、`/usr/local/bin`
   - 设置面板中用户添加的自定义路径
   - 使用 **Search for dsh** 时：macOS Spotlight 索引（`mdfind`）或对常见安装根目录的有界 `find` 搜索
+  - 勾选推荐插件安装时：`~/.dsh/profiles/web/`（写入 profile manifest、patch/workspace 文件和 `node_modules`）
 
   插件间接依赖 dsh 读取 `~/.dsh/.credentials.yaml`（dsh 启动时读取自己的凭据文件）。插件本身不读取、修改或传输凭据文件。
 - **无遥测**：插件不收集任何数据，不发送任何分析信息。
